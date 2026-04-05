@@ -46,7 +46,6 @@ def init_db():
         )
     ''')
     
-    # Safe patches for all columns
     try: cursor.execute("ALTER TABLE trades ADD COLUMN qty INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE trades ADD COLUMN entry_time TEXT DEFAULT 'N/A'")
@@ -63,7 +62,7 @@ def init_db():
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE trades ADD COLUMN trade_type TEXT DEFAULT 'Unknown'")
     except sqlite3.OperationalError: pass 
-
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS journal_entries (
             trade_id TEXT PRIMARY KEY,
@@ -383,17 +382,12 @@ def clean_and_prepare_data(df):
     if 'Entry_Time' not in df.columns: df['Entry_Time'] = df['Timestamp']
     if 'Exit_Time' not in df.columns: df['Exit_Time'] = df['Timestamp']
 
-    # --- Long/Short Detection & Chronological Swapping ---
-    df['trade_type'] = 'Long' # Assume Long by default
+    df['trade_type'] = 'Long'
     if 'Entry_Time' in df.columns and 'Exit_Time' in df.columns:
         dt_entry = pd.to_datetime(df['Entry_Time'], errors='coerce')
         dt_exit = pd.to_datetime(df['Exit_Time'], errors='coerce')
-        
-        # If Bought Time > Sold Time chronologically, it was mathematically a Short Trade
         is_short = dt_entry > dt_exit
         df.loc[is_short, 'trade_type'] = 'Short'
-        
-        # Swap times and prices so 'In' is always before 'Out'
         df.loc[is_short, ['Entry_Time', 'Exit_Time']] = df.loc[is_short, ['Exit_Time', 'Entry_Time']].values
         if 'Entry_Price' in df.columns and 'Exit_Price' in df.columns:
             df.loc[is_short, ['Entry_Price', 'Exit_Price']] = df.loc[is_short, ['Exit_Price', 'Entry_Price']].values
@@ -527,11 +521,12 @@ else:
     st.header("Dashboard Filters")
     col_filt1, col_filt2 = st.columns(2)
     
+    # THE FIX: Multi-select filtering implementation
     with col_filt1:
-        instrument_list = ["All Instruments"] + list(master_df['Instrument'].dropna().unique())
-        selected_instrument = st.selectbox("Filter by Instrument", instrument_list)
-        if selected_instrument != "All Instruments":
-            master_df = master_df[master_df['Instrument'] == selected_instrument]
+        instrument_list = sorted(list(master_df['Instrument'].dropna().unique()))
+        selected_instruments = st.multiselect("Filter by Instrument (leave blank to show all)", instrument_list)
+        if selected_instruments: # If the box is not empty, apply the filter
+            master_df = master_df[master_df['Instrument'].isin(selected_instruments)]
             
     with col_filt2:
         min_score, max_score = st.slider("Filter by Trade Score", 0, 10, (0, 10))
@@ -658,7 +653,6 @@ else:
                     trade_color = "🟢" if net_pnl >= 0 else "🔴"
                     
                     with st.container(border=True):
-                        # Title explicitly calls out LONG or SHORT
                         st.markdown(f"**{trade_color} {trade_type.upper()} Trade at {timestamp}**")
                         
                         col_details, col_journal = st.columns([1, 2.5])
