@@ -104,6 +104,7 @@ def init_db():
         )
     ''')
     
+    # Safe patches for database continuity
     try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN score INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN good_bad TEXT")
@@ -125,6 +126,26 @@ def init_db():
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE trading_rules ADD COLUMN stop_trading TEXT")
     except sqlite3.OperationalError: pass 
+
+    # NEW: Safe patches for the A-F Grading System
+    try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN mon_grade TEXT DEFAULT '-'")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN tue_grade TEXT DEFAULT '-'")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN wed_grade TEXT DEFAULT '-'")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN thu_grade TEXT DEFAULT '-'")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN fri_grade TEXT DEFAULT '-'")
+    except sqlite3.OperationalError: pass 
+
+    # NEW: Standalone table specifically for Report Card History
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS weekly_history (
+            week_range TEXT PRIMARY KEY,
+            report_text TEXT
+        )
+    ''')
         
     conn.commit()
     conn.close()
@@ -280,32 +301,76 @@ def get_trading_rules():
         return tuple(val if val is not None else "" for val in result)
     return ("", "", "", "", "", "", "", "")
 
-def save_weekly_goals(goal, mon_s, mon_h, mon_p, tue_s, tue_h, tue_p, wed_s, wed_h, wed_p, thu_s, thu_h, thu_p, fri_s, fri_h, fri_p, history):
+def save_weekly_goals(goal, 
+                      mon_s, mon_h, mon_p, mon_g,
+                      tue_s, tue_h, tue_p, tue_g,
+                      wed_s, wed_h, wed_p, wed_g,
+                      thu_s, thu_h, thu_p, thu_g,
+                      fri_s, fri_h, fri_p, fri_g,
+                      history):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
         REPLACE INTO weekly_goals (
             id, goal, 
-            mon_status, mon_how, mon_plan, 
-            tue_status, tue_how, tue_plan, 
-            wed_status, wed_how, wed_plan, 
-            thu_status, thu_how, thu_plan, 
-            fri_status, fri_how, fri_plan, 
+            mon_status, mon_how, mon_plan, mon_grade,
+            tue_status, tue_how, tue_plan, tue_grade,
+            wed_status, wed_how, wed_plan, wed_grade,
+            thu_status, thu_how, thu_plan, thu_grade,
+            fri_status, fri_how, fri_plan, fri_grade,
             history
-        ) VALUES ('global', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (goal, mon_s, mon_h, mon_p, tue_s, tue_h, tue_p, wed_s, wed_h, wed_p, thu_s, thu_h, thu_p, fri_s, fri_h, fri_p, history))
+        ) VALUES ('global', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (goal, mon_s, mon_h, mon_p, mon_g, tue_s, tue_h, tue_p, tue_g, wed_s, wed_h, wed_p, wed_g, thu_s, thu_h, thu_p, thu_g, fri_s, fri_h, fri_p, fri_g, history))
     conn.commit()
     conn.close()
 
 def get_weekly_goals():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM weekly_goals WHERE id = "global"')
+    # Explicitly pulling all columns so the unpack logic never crashes
+    cursor.execute('''
+        SELECT goal, 
+               mon_status, mon_how, mon_plan, mon_grade,
+               tue_status, tue_how, tue_plan, tue_grade,
+               wed_status, wed_how, wed_plan, wed_grade,
+               thu_status, thu_how, thu_plan, thu_grade,
+               fri_status, fri_how, fri_plan, fri_grade,
+               history 
+        FROM weekly_goals WHERE id = "global"
+    ''')
     result = cursor.fetchone()
     conn.close()
     if result:
-        return result[1:]
-    return ("", "N/A", "", "", "N/A", "", "", "N/A", "", "", "N/A", "", "", "N/A", "", "", "")
+        return tuple(val if val is not None else "" for val in result)
+    return ("", 
+            "N/A", "", "", "-",
+            "N/A", "", "", "-",
+            "N/A", "", "", "-",
+            "N/A", "", "", "-",
+            "N/A", "", "", "-",
+            "")
+
+def save_weekly_history(week_range, report_text):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("REPLACE INTO weekly_history (week_range, report_text) VALUES (?, ?)", (week_range, report_text))
+    conn.commit()
+    conn.close()
+
+def get_weekly_history():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT week_range, report_text FROM weekly_history ORDER BY week_range DESC")
+    result = cursor.fetchall()
+    conn.close()
+    return result
+
+def delete_weekly_history(week_range):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM weekly_history WHERE week_range = ?", (week_range,))
+    conn.commit()
+    conn.close()
 
 init_db()
 
@@ -431,17 +496,20 @@ with st.expander("➕ Upload New Trades", expanded=False):
 
 st.divider()
 
+# --- REBUILT: Weekly Improvement Goal & History Engine ---
 st.header("🎯 Weekly Improvement Goal")
 wg_data = get_weekly_goals()
 (wg_goal, 
- mon_s, mon_h, mon_p, 
- tue_s, tue_h, tue_p, 
- wed_s, wed_h, wed_p, 
- thu_s, thu_h, thu_p, 
- fri_s, fri_h, fri_p, 
- wg_history) = wg_data
+ mon_s, mon_h, mon_p, mon_g,
+ tue_s, tue_h, tue_p, tue_g,
+ wed_s, wed_h, wed_p, wed_g,
+ thu_s, thu_h, thu_p, thu_g,
+ fri_s, fri_h, fri_p, fri_g,
+ legacy_history) = wg_data
 
 status_options = ["N/A", "Yes", "No"]
+grade_options = ["-", "A", "B", "C", "D", "F"]
+
 new_wg_goal = st.text_area("Weekly goal that I plan to improve on and focus on for the week:", value=wg_goal, height=100)
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -450,39 +518,83 @@ day_col1, day_col2, day_col3, day_col4, day_col5 = st.columns(5)
 with day_col1:
     st.markdown("<div style='text-align: center; font-weight: bold; font-size: 1.2em;'>Monday</div>", unsafe_allow_html=True)
     new_mon_s = st.radio("Did I follow the goal?", status_options, index=status_options.index(mon_s) if mon_s in status_options else 0, key="mon_s", horizontal=True)
+    new_mon_g = st.selectbox("Grade", grade_options, index=grade_options.index(mon_g) if mon_g in grade_options else 0, key="mon_g")
     new_mon_h = st.text_area("How did I follow or not follow this goal?", value=mon_h, key="mon_h", height=100)
     new_mon_p = st.text_area("What do I plan to do to continue following up on this goal?", value=mon_p, key="mon_p", height=100)
 
 with day_col2:
     st.markdown("<div style='text-align: center; font-weight: bold; font-size: 1.2em;'>Tuesday</div>", unsafe_allow_html=True)
     new_tue_s = st.radio("Did I follow the goal?", status_options, index=status_options.index(tue_s) if tue_s in status_options else 0, key="tue_s", horizontal=True)
+    new_tue_g = st.selectbox("Grade", grade_options, index=grade_options.index(tue_g) if tue_g in grade_options else 0, key="tue_g")
     new_tue_h = st.text_area("How did I follow or not follow this goal?", value=tue_h, key="tue_h", height=100)
     new_tue_p = st.text_area("What do I plan to do to continue following up on this goal?", value=tue_p, key="tue_p", height=100)
 
 with day_col3:
     st.markdown("<div style='text-align: center; font-weight: bold; font-size: 1.2em;'>Wednesday</div>", unsafe_allow_html=True)
     new_wed_s = st.radio("Did I follow the goal?", status_options, index=status_options.index(wed_s) if wed_s in status_options else 0, key="wed_s", horizontal=True)
+    new_wed_g = st.selectbox("Grade", grade_options, index=grade_options.index(wed_g) if wed_g in grade_options else 0, key="wed_g")
     new_wed_h = st.text_area("How did I follow or not follow this goal?", value=wed_h, key="wed_h", height=100)
     new_wed_p = st.text_area("What do I plan to do to continue following up on this goal?", value=wed_p, key="wed_p", height=100)
 
 with day_col4:
     st.markdown("<div style='text-align: center; font-weight: bold; font-size: 1.2em;'>Thursday</div>", unsafe_allow_html=True)
     new_thu_s = st.radio("Did I follow the goal?", status_options, index=status_options.index(thu_s) if thu_s in status_options else 0, key="thu_s", horizontal=True)
+    new_thu_g = st.selectbox("Grade", grade_options, index=grade_options.index(thu_g) if thu_g in grade_options else 0, key="thu_g")
     new_thu_h = st.text_area("How did I follow or not follow this goal?", value=thu_h, key="thu_h", height=100)
     new_thu_p = st.text_area("What do I plan to do to continue following up on this goal?", value=thu_p, key="thu_p", height=100)
 
 with day_col5:
     st.markdown("<div style='text-align: center; font-weight: bold; font-size: 1.2em;'>Friday</div>", unsafe_allow_html=True)
     new_fri_s = st.radio("Did I follow the goal?", status_options, index=status_options.index(fri_s) if fri_s in status_options else 0, key="fri_s", horizontal=True)
+    new_fri_g = st.selectbox("Grade", grade_options, index=grade_options.index(fri_g) if fri_g in grade_options else 0, key="fri_g")
     new_fri_h = st.text_area("How did I follow or not follow this goal?", value=fri_h, key="fri_h", height=100)
     new_fri_p = st.text_area("What do I plan to do to continue following up on this goal?", value=fri_p, key="fri_p", height=100)
 
 st.markdown("<br>", unsafe_allow_html=True)
-new_history = st.text_area("History of my goals and progress (Track your changes and past weeks here):", value=wg_history, height=150)
 
-if st.button("Save Weekly Goal & Progress", use_container_width=True):
-    save_weekly_goals(new_wg_goal, new_mon_s, new_mon_h, new_mon_p, new_tue_s, new_tue_h, new_tue_p, new_wed_s, new_wed_h, new_wed_p, new_thu_s, new_thu_h, new_thu_p, new_fri_s, new_fri_h, new_fri_p, new_history)
+if st.button("Save Current Weekly Goal Inputs", use_container_width=True):
+    save_weekly_goals(new_wg_goal, new_mon_s, new_mon_h, new_mon_p, new_mon_g, new_tue_s, new_tue_h, new_tue_p, new_tue_g, new_wed_s, new_wed_h, new_wed_p, new_wed_g, new_thu_s, new_thu_h, new_thu_p, new_thu_g, new_fri_s, new_fri_h, new_fri_p, new_fri_g, legacy_history)
     st.success("Weekly tracking successfully saved to vault!")
+
+st.divider()
+
+st.markdown("### 🗄️ Archive Week to History Report Card")
+col_arch1, col_arch2 = st.columns([2, 1])
+
+with col_arch1:
+    week_date_range = st.text_input("Enter Date Range to save this week (e.g., 06.04.2026 - 10.04.2026):")
+    
+with col_arch2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("Archive to History", use_container_width=True):
+        if week_date_range:
+            # Generate the clean text format for the report card
+            report = f"The goal for the week was:\n- {new_wg_goal}\n\n"
+            report += f"Monday - {new_mon_s} - {new_mon_g}\n"
+            report += f"Tuesday - {new_tue_s} - {new_tue_g}\n"
+            report += f"Wednesday - {new_wed_s} - {new_wed_g}\n"
+            report += f"Thursday - {new_thu_s} - {new_thu_g}\n"
+            report += f"Friday - {new_fri_s} - {new_fri_g}\n"
+            
+            save_weekly_history(week_date_range, report)
+            st.success("Archived to History successfully!")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error("Please type a Date Range first.")
+
+st.markdown("### 📚 Weekly Report Cards History")
+history_records = get_weekly_history()
+
+if not history_records:
+    st.info("No report cards saved yet. Fill out the date range above and click Archive to create your first report card.")
+else:
+    for w_range, r_text in history_records:
+        with st.expander(f"Week: {w_range}", expanded=False):
+            st.text(r_text)
+            if st.button(f"🗑️ Delete this Report Card", key=f"del_hist_{w_range}"):
+                delete_weekly_history(w_range)
+                st.rerun()
 
 st.divider()
 
@@ -521,11 +633,10 @@ else:
     st.header("Dashboard Filters")
     col_filt1, col_filt2 = st.columns(2)
     
-    # THE FIX: Multi-select filtering implementation
     with col_filt1:
         instrument_list = sorted(list(master_df['Instrument'].dropna().unique()))
         selected_instruments = st.multiselect("Filter by Instrument (leave blank to show all)", instrument_list)
-        if selected_instruments: # If the box is not empty, apply the filter
+        if selected_instruments:
             master_df = master_df[master_df['Instrument'].isin(selected_instruments)]
             
     with col_filt2:
