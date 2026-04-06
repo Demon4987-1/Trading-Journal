@@ -287,6 +287,45 @@ def get_market_data(instrument, start_time, end_time):
         df = df.loc[mask].sort_values(by='Datetime')
     return df
 
+# --- THE FIX: Brand new function to isolate and calculate MAE and MFE mathematically ---
+def calculate_mae_mfe(instrument, entry_time_str, exit_time_str, entry_price, trade_type):
+    if entry_time_str == 'N/A' or exit_time_str == 'N/A' or entry_price == 0.0:
+        return "N/A", "N/A"
+        
+    try:
+        dt_in = pd.to_datetime(entry_time_str).replace(tzinfo=None)
+        dt_out = pd.to_datetime(exit_time_str).replace(tzinfo=None)
+        
+        # Failsafe: Ensure dt_in is always the smaller time
+        if dt_in > dt_out:
+            dt_in, dt_out = dt_out, dt_in
+            
+        # Isolate ONLY the candles that occurred during the trade
+        market_df = get_market_data(instrument, dt_in, dt_out)
+        
+        if market_df.empty:
+            return "N/A", "N/A"
+            
+        max_high = market_df['high'].max()
+        min_low = market_df['low'].min()
+        
+        if trade_type.upper() == 'LONG':
+            mfe = max_high - entry_price
+            mae = entry_price - min_low
+        elif trade_type.upper() == 'SHORT':
+            mfe = entry_price - min_low
+            mae = max_high - entry_price
+        else:
+            return "N/A", "N/A"
+            
+        # Mathematical safety net to prevent fractional negative numbers due to minor data slippage
+        mfe = max(0.0, mfe)
+        mae = max(0.0, mae)
+        
+        return mfe, mae
+    except Exception:
+        return "N/A", "N/A"
+
 def delete_trade_from_db(trade_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -579,7 +618,6 @@ def render_tradingview_chart(market_df, entry_time_str, exit_time_str, trade_typ
     candles_json = json.dumps(candles)
     markers_json = json.dumps(markers)
     
-    # THE FIX: Restored HTML container to 450px to perfectly match the right column's proportions
     html_template = f"""
     <div id="tvchart" style="width: 100%; height: 450px; background-color: #131722;"></div>
     <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
@@ -975,7 +1013,6 @@ else:
                     with st.container(border=True):
                         st.markdown(f"**{trade_color} {trade_type.upper()} Trade at {timestamp}**")
                         
-                        # --- THE FIX: We keep the 1 to 2.5 column ratio ---
                         col_details, col_journal = st.columns([1, 2.5])
                         
                         with col_details:
@@ -990,6 +1027,14 @@ else:
                             st.markdown("---")
                             st.write(f"**In:** {entry_price} @ {entry_time}")
                             st.write(f"**Out:** {exit_price} @ {exit_time}")
+                            
+                            # --- THE FIX: We dynamically calculate and inject MAE/MFE here ---
+                            mfe_val, mae_val = calculate_mae_mfe(instrument, entry_time, exit_time, entry_price, trade_type)
+                            if mfe_val != "N/A":
+                                st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts")
+                                st.write(f"**MAE (Max Heat):** -{mae_val:.2f} pts")
+                            else:
+                                st.write("**MFE / MAE:** No market data for window")
                             st.markdown("---")
                             
                             if st.button("🗑️ Delete Trade", key=f"del_trade_{trade_id}"):
@@ -1002,8 +1047,6 @@ else:
                             st.markdown("---")
                             
                             safe_trade_id = str(trade_id).replace("/", "-").replace("\\", "-")
-                            
-                            # --- THE FIX: Removed the interactive chart from this narrow left column ---
                             
                             screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}")
                             if screenshot is not None:
@@ -1063,17 +1106,15 @@ else:
                                 
                             st.markdown("---")
                             
-                            # --- THE FIX: Placed the interactive chart here in the wide right column ---
                             try:
                                 trade_dt = pd.to_datetime(timestamp)
-                                start_time = trade_dt - timedelta(hours=12)
-                                end_time = trade_dt + timedelta(hours=12)
+                                start_time = trade_dt - timedelta(hours=16)
+                                end_time = trade_dt + timedelta(hours=16)
                                 market_df = get_market_data(instrument, start_time, end_time)
                                 
                                 if not market_df.empty:
                                     st.markdown("### 📊 TradingView Interactive Chart")
                                     html_chart = render_tradingview_chart(market_df, entry_time, exit_time, trade_type)
-                                    # Height brought back down to 450px so it balances nicely next to the manual screenshot
                                     components.html(html_chart, height=450)
                             except Exception as e:
                                 pass 
