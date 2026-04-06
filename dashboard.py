@@ -1,11 +1,13 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import os
 import sqlite3
 import calendar
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import re
+import json
 
 # --- Configuration & Setup ---
 st.set_page_config(page_title="Trading Journal Vault", layout="wide")
@@ -42,26 +44,10 @@ def init_db():
             entry_price REAL,
             exit_price REAL,
             commission REAL,
-            net_pnl REAL
+            net_pnl REAL,
+            trade_type TEXT
         )
     ''')
-    
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN qty INTEGER DEFAULT 0")
-    except sqlite3.OperationalError: pass 
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN entry_time TEXT DEFAULT 'N/A'")
-    except sqlite3.OperationalError: pass 
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN exit_time TEXT DEFAULT 'N/A'")
-    except sqlite3.OperationalError: pass 
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN entry_price REAL DEFAULT 0.0")
-    except sqlite3.OperationalError: pass 
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN exit_price REAL DEFAULT 0.0")
-    except sqlite3.OperationalError: pass 
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN commission REAL DEFAULT 0.0")
-    except sqlite3.OperationalError: pass 
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN net_pnl REAL DEFAULT 0.0")
-    except sqlite3.OperationalError: pass 
-    try: cursor.execute("ALTER TABLE trades ADD COLUMN trade_type TEXT DEFAULT 'Unknown'")
-    except sqlite3.OperationalError: pass 
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS journal_entries (
@@ -103,8 +89,42 @@ def init_db():
             history TEXT
         )
     ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS weekly_history (
+            week_range TEXT PRIMARY KEY,
+            report_text TEXT
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS market_data (
+            instrument TEXT,
+            timestamp TEXT,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            PRIMARY KEY (instrument, timestamp)
+        )
+    ''')
     
-    # Safe patches for database continuity
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN qty INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN entry_time TEXT DEFAULT 'N/A'")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN exit_time TEXT DEFAULT 'N/A'")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN entry_price REAL DEFAULT 0.0")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN exit_price REAL DEFAULT 0.0")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN commission REAL DEFAULT 0.0")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN net_pnl REAL DEFAULT 0.0")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE trades ADD COLUMN trade_type TEXT DEFAULT 'Unknown'")
+    except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN score INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN good_bad TEXT")
@@ -113,7 +133,6 @@ def init_db():
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN action_plan TEXT")
     except sqlite3.OperationalError: pass 
-    
     try: cursor.execute("ALTER TABLE trading_rules ADD COLUMN prep_day TEXT")
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE trading_rules ADD COLUMN prep_week TEXT")
@@ -126,8 +145,6 @@ def init_db():
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE trading_rules ADD COLUMN stop_trading TEXT")
     except sqlite3.OperationalError: pass 
-
-    # NEW: Safe patches for the A-F Grading System
     try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN mon_grade TEXT DEFAULT '-'")
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN tue_grade TEXT DEFAULT '-'")
@@ -139,14 +156,6 @@ def init_db():
     try: cursor.execute("ALTER TABLE weekly_goals ADD COLUMN fri_grade TEXT DEFAULT '-'")
     except sqlite3.OperationalError: pass 
 
-    # NEW: Standalone table specifically for Report Card History
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS weekly_history (
-            week_range TEXT PRIMARY KEY,
-            report_text TEXT
-        )
-    ''')
-        
     conn.commit()
     conn.close()
 
@@ -161,13 +170,11 @@ def insert_trades_to_db(df):
         timestamp = row['Timestamp']
         pnl = row.get('P&L', 0.0)
         duration = row.get('Duration', 'N/A')
-        
         qty = row.get('Qty', 0)
         entry_time = row.get('Entry_Time', 'N/A')
         exit_time = row.get('Exit_Time', 'N/A')
         entry_price = row.get('Entry_Price', 0.0)
         exit_price = row.get('Exit_Price', 0.0)
-        
         commission = row.get('Commission', 0.0)
         net_pnl = row.get('Net_PnL', pnl)
         trade_type = row.get('trade_type', 'Unknown')
@@ -193,6 +200,36 @@ def insert_trades_to_db(df):
     conn.commit()
     conn.close()
     return inserted_count
+
+def insert_market_data_to_db(df, instrument):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    inserted_count = 0
+    
+    for index, row in df.iterrows():
+        timestamp = str(row['Timestamp'])
+        op = float(row['Open'])
+        hi = float(row['High'])
+        lo = float(row['Low'])
+        cl = float(row['Close'])
+        
+        cursor.execute('''
+            REPLACE INTO market_data (instrument, timestamp, open, high, low, close)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (instrument, timestamp, op, hi, lo, cl))
+        inserted_count += 1
+            
+    conn.commit()
+    conn.close()
+    return inserted_count
+
+# --- THE FIX: Custom function to wipe out all bulky market data at once ---
+def delete_all_market_data():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM market_data")
+    conn.commit()
+    conn.close()
 
 def load_all_trades():
     conn = sqlite3.connect(DB_FILE)
@@ -229,6 +266,25 @@ def load_all_trades():
         df['improve'] = df['improve'].fillna("")
         df['action_plan'] = df['action_plan'].fillna("")
         
+    return df
+
+def get_market_data(instrument, start_time, end_time):
+    conn = sqlite3.connect(DB_FILE)
+    query = '''
+        SELECT timestamp, open, high, low, close 
+        FROM market_data 
+        WHERE instrument = ?
+    '''
+    df = pd.read_sql_query(query, conn, params=(instrument,))
+    conn.close()
+    
+    if not df.empty:
+        df['Datetime'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        df['Datetime'] = df['Datetime'].dt.tz_localize(None) 
+        df = df.dropna(subset=['Datetime'])
+        
+        mask = (df['Datetime'] >= start_time) & (df['Datetime'] <= end_time)
+        df = df.loc[mask].sort_values(by='Datetime')
     return df
 
 def delete_trade_from_db(trade_id):
@@ -301,13 +357,7 @@ def get_trading_rules():
         return tuple(val if val is not None else "" for val in result)
     return ("", "", "", "", "", "", "", "")
 
-def save_weekly_goals(goal, 
-                      mon_s, mon_h, mon_p, mon_g,
-                      tue_s, tue_h, tue_p, tue_g,
-                      wed_s, wed_h, wed_p, wed_g,
-                      thu_s, thu_h, thu_p, thu_g,
-                      fri_s, fri_h, fri_p, fri_g,
-                      history):
+def save_weekly_goals(goal, mon_s, mon_h, mon_p, mon_g, tue_s, tue_h, tue_p, tue_g, wed_s, wed_h, wed_p, wed_g, thu_s, thu_h, thu_p, thu_g, fri_s, fri_h, fri_p, fri_g, history):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
@@ -327,7 +377,6 @@ def save_weekly_goals(goal,
 def get_weekly_goals():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Explicitly pulling all columns so the unpack logic never crashes
     cursor.execute('''
         SELECT goal, 
                mon_status, mon_how, mon_plan, mon_grade,
@@ -342,13 +391,7 @@ def get_weekly_goals():
     conn.close()
     if result:
         return tuple(val if val is not None else "" for val in result)
-    return ("", 
-            "N/A", "", "", "-",
-            "N/A", "", "", "-",
-            "N/A", "", "", "-",
-            "N/A", "", "", "-",
-            "N/A", "", "", "-",
-            "")
+    return ("", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", "")
 
 def save_weekly_history(week_range, report_text):
     conn = sqlite3.connect(DB_FILE)
@@ -428,21 +471,15 @@ def clean_and_prepare_data(df):
     if 'Instrument' not in df.columns: df['Instrument'] = 'Unknown'
     if 'Duration' not in df.columns: df['Duration'] = 'N/A'
     
-    if 'Qty' not in df.columns:
-        df['Qty'] = 0
-    else:
-        df['Qty'] = df['Qty'].apply(force_float).astype(int)
+    if 'Qty' not in df.columns: df['Qty'] = 0
+    else: df['Qty'] = df['Qty'].apply(force_float).astype(int)
 
-    if 'P&L' not in df.columns:
-        df['P&L'] = 0.0
-    else:
-        df['P&L'] = df['P&L'].apply(force_float)
+    if 'P&L' not in df.columns: df['P&L'] = 0.0
+    else: df['P&L'] = df['P&L'].apply(force_float)
 
     for price_col in ['Entry_Price', 'Exit_Price']:
-        if price_col not in df.columns:
-            df[price_col] = 0.0
-        else:
-            df[price_col] = df[price_col].apply(force_float)
+        if price_col not in df.columns: df[price_col] = 0.0
+        else: df[price_col] = df[price_col].apply(force_float)
             
     if 'Entry_Time' not in df.columns: df['Entry_Time'] = df['Timestamp']
     if 'Exit_Time' not in df.columns: df['Exit_Time'] = df['Timestamp']
@@ -463,40 +500,156 @@ def clean_and_prepare_data(df):
         instrument = str(row['Instrument']).upper().strip()
         qty = row['Qty']
         rate = 0.0
-        
         for base_symbol in sorted(COMMISSIONS.keys(), key=len, reverse=True):
             if instrument.startswith(base_symbol):
                 rate = COMMISSIONS[base_symbol]
                 break
-                
         return rate * qty * 2
 
     df['Commission'] = df.apply(calculate_commission, axis=1)
     df['Net_PnL'] = df['P&L'] - df['Commission']
-    
     return df
+
+def clean_ohlcv_data(df):
+    col_mapping = {}
+    upper_cols = {col: str(col).strip().upper() for col in df.columns}
+    for orig_col, clean_col in upper_cols.items():
+        clean_col_compact = str(clean_col).replace(" ", "").replace("_", "")
+        if clean_col_compact in ['DATE', 'TIME', 'DATETIME', 'TIMESTAMP']: col_mapping[orig_col] = 'Timestamp'
+        elif clean_col_compact in ['OPEN', 'O']: col_mapping[orig_col] = 'Open'
+        elif clean_col_compact in ['HIGH', 'H']: col_mapping[orig_col] = 'High'
+        elif clean_col_compact in ['LOW', 'L']: col_mapping[orig_col] = 'Low'
+        elif clean_col_compact in ['CLOSE', 'C']: col_mapping[orig_col] = 'Close'
+    df = df.rename(columns=col_mapping)
+    
+    required = ['Timestamp', 'Open', 'High', 'Low', 'Close']
+    for req in required:
+        if req not in df.columns:
+            st.error(f"Missing required OHLCV column: {req}")
+            return pd.DataFrame()
+            
+    df = df.dropna(subset=['Timestamp']).copy()
+    for col in ['Open', 'High', 'Low', 'Close']:
+        df[col] = df[col].apply(force_float)
+    return df
+
+def render_tradingview_chart(market_df, entry_time_str, exit_time_str, trade_type):
+    market_df = market_df.drop_duplicates(subset=['Datetime']).sort_values(by='Datetime')
+    
+    valid_times = []
+    candles = []
+    for _, row in market_df.iterrows():
+        unix_time = int(row['Datetime'].timestamp())
+        valid_times.append(unix_time)
+        candles.append({
+            "time": unix_time,
+            "open": row['open'],
+            "high": row['high'],
+            "low": row['low'],
+            "close": row['close']
+        })
+        
+    markers = []
+    if entry_time_str != 'N/A' and exit_time_str != 'N/A' and valid_times:
+        dt_in = pd.to_datetime(entry_time_str).replace(tzinfo=None)
+        dt_out = pd.to_datetime(exit_time_str).replace(tzinfo=None)
+        
+        unix_in = int(dt_in.timestamp())
+        unix_out = int(dt_out.timestamp())
+        
+        if unix_in not in valid_times:
+            unix_in = min(valid_times, key=lambda x: abs(x - unix_in))
+        if unix_out not in valid_times:
+            unix_out = min(valid_times, key=lambda x: abs(x - unix_out))
+            
+        in_color = "#2196F3" if trade_type == "Long" else "#E91E63"
+        out_color = "#E91E63" if trade_type == "Long" else "#2196F3"
+        
+        raw_markers = [
+            {"time": unix_in, "position": "belowBar", "color": in_color, "shape": "arrowUp", "text": "In"},
+            {"time": unix_out, "position": "aboveBar", "color": out_color, "shape": "arrowDown", "text": "Out"}
+        ]
+        markers = sorted(raw_markers, key=lambda x: x["time"])
+        
+    candles_json = json.dumps(candles)
+    markers_json = json.dumps(markers)
+    
+    html_template = f"""
+    <div id="tvchart" style="width: 100%; height: 400px;"></div>
+    <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        try {{
+            const chart = LightweightCharts.createChart(document.getElementById('tvchart'), {{
+                autoSize: true, 
+                layout: {{ backgroundColor: '#ffffff', textColor: '#333' }},
+                grid: {{ vertLines: {{ color: '#f0f3fa' }}, horzLines: {{ color: '#f0f3fa' }} }},
+                timeScale: {{ timeVisible: true, secondsVisible: false }},
+            }});
+            
+            const candleSeries = chart.addCandlestickSeries({{
+                upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
+                wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+            }});
+            
+            const data = {candles_json};
+            candleSeries.setData(data);
+            
+            const markers = {markers_json};
+            if (markers.length > 0) {{
+                candleSeries.setMarkers(markers);
+            }}
+            
+            chart.timeScale().fitContent();
+        }} catch (error) {{
+            document.getElementById('tvchart').innerHTML = "<div style='color:red; font-weight:bold; padding:20px; border:1px solid red;'>Chart Rendering Error: " + error.message + "</div>";
+        }}
+    </script>
+    """
+    return html_template
 
 # --- Main Dashboard ---
 st.title("📈 Permanent Trading Vault & Journal")
 st.markdown("Upload a new CSV to add trades to your vault, or simply review your historical performance.")
 
-with st.expander("➕ Upload New Trades", expanded=False):
-    uploaded_file = st.file_uploader("Upload Tradovate Trade Report (CSV)", type=['csv'])
-    
-    if uploaded_file is not None:
-        if st.button("Process & Save Trades to Vault"):
-            raw_df = pd.read_csv(uploaded_file)
-            clean_df = clean_and_prepare_data(raw_df)
-            if not clean_df.empty:
-                new_trades = insert_trades_to_db(clean_df)
-                total_pnl_found = clean_df['P&L'].sum()
-                st.success(f"Successfully processed! Added {new_trades} trades. (Gross P&L Found: ${total_pnl_found:.2f})")
-                time.sleep(1.5)
-                st.rerun()
+col_up1, col_up2 = st.columns(2)
+
+with col_up1:
+    with st.expander("➕ Upload New Trades", expanded=False):
+        uploaded_file = st.file_uploader("Upload Tradovate Trade Report (CSV)", type=['csv'])
+        if uploaded_file is not None:
+            if st.button("Process & Save Trades to Vault"):
+                raw_df = pd.read_csv(uploaded_file)
+                clean_df = clean_and_prepare_data(raw_df)
+                if not clean_df.empty:
+                    new_trades = insert_trades_to_db(clean_df)
+                    total_pnl_found = clean_df['P&L'].sum()
+                    st.success(f"Successfully processed! Added {new_trades} trades. (Gross P&L Found: ${total_pnl_found:.2f})")
+                    time.sleep(1.5)
+                    st.rerun()
+
+with col_up2:
+    with st.expander("📈 Upload TradingView Market Data (OHLCV)", expanded=False):
+        st.markdown("Upload a 1-minute OHLCV CSV from TradingView to generate interactive charts.")
+        ohlcv_instrument = st.text_input("Enter Instrument Name exactly as traded (e.g., MNQM6):")
+        ohlcv_file = st.file_uploader("Upload TradingView Data (CSV)", type=['csv'], key="ohlcv")
+        if ohlcv_file is not None and ohlcv_instrument:
+            if st.button("Process & Save Market Data"):
+                raw_ohlcv = pd.read_csv(ohlcv_file)
+                clean_ohlcv = clean_ohlcv_data(raw_ohlcv)
+                if not clean_ohlcv.empty:
+                    rows = insert_market_data_to_db(clean_ohlcv, ohlcv_instrument.upper())
+                    st.success(f"Successfully processed {rows} minutes of market data for {ohlcv_instrument.upper()}!")
+        
+        st.markdown("---")
+        # THE FIX: A dedicated button to completely clear the market data cache.
+        if st.button("🗑️ Clear All Saved Market Data", use_container_width=True):
+            delete_all_market_data()
+            st.success("All historical market data has been permanently erased from your vault!")
+            time.sleep(1.5)
+            st.rerun()
 
 st.divider()
 
-# --- REBUILT: Weekly Improvement Goal & History Engine ---
 st.header("🎯 Weekly Improvement Goal")
 wg_data = get_weekly_goals()
 (wg_goal, 
@@ -568,7 +721,6 @@ with col_arch2:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("Archive to History", use_container_width=True):
         if week_date_range:
-            # Generate the clean text format for the report card
             report = f"The goal for the week was:\n- {new_wg_goal}\n\n"
             report += f"Monday - {new_mon_s} - {new_mon_g}\n"
             report += f"Tuesday - {new_tue_s} - {new_tue_g}\n"
@@ -655,11 +807,20 @@ else:
         total_net = master_df['Net_PnL'].sum()
         total_trades = len(master_df)
         
-        col1, col2, col3, col4 = st.columns(4)
+        total_gross_profit = master_df[master_df['P&L'] > 0]['P&L'].sum()
+        total_gross_loss = abs(master_df[master_df['P&L'] < 0]['P&L'].sum())
+        
+        if total_gross_loss == 0:
+            all_time_pf = "∞" if total_gross_profit > 0 else "0.00"
+        else:
+            all_time_pf = f"{(total_gross_profit / total_gross_loss):.2f}"
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Gross P&L", f"${total_gross:.2f}")
         col2.metric("Commissions", f"-${total_commissions:.2f}")
         col3.metric("Net P&L", f"${total_net:.2f}")
         col4.metric("Win Rate", f"{(len(master_df[master_df['Net_PnL'] > 0]) / total_trades * 100):.1f}%" if total_trades > 0 else "0%")
+        col5.metric("Profit Factor", all_time_pf)
 
         st.subheader("Cumulative Net P&L")
         master_df['Cumulative Net P&L'] = master_df['Net_PnL'].cumsum()
@@ -681,7 +842,7 @@ else:
         )
         
         sample_date = month_df['Datetime'].iloc[0]
-        year_num, month_num = sample_date.year, sample_date.month
+        year_num, month_num = sample_date.date().year, sample_date.date().month
         
         cal = calendar.monthcalendar(year_num, month_num)
         days_of_week = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -724,9 +885,17 @@ else:
             daily_comm = daily_df['Commission'].sum()
             daily_net = daily_df['Net_PnL'].sum()
             
+            daily_gross_profit = daily_df[daily_df['P&L'] > 0]['P&L'].sum()
+            daily_gross_loss = abs(daily_df[daily_df['P&L'] < 0]['P&L'].sum())
+            
+            if daily_gross_loss == 0:
+                daily_pf = "∞" if daily_gross_profit > 0 else "0.00"
+            else:
+                daily_pf = f"{(daily_gross_profit / daily_gross_loss):.2f}"
+            
             day_color = "🟢" if daily_net >= 0 else "🔴"
             
-            with st.expander(f"{day_color} {date_str} | Net P&L: ${daily_net:.2f} (Gross: ${daily_gross:.2f}, Fees: ${daily_comm:.2f}) | {len(daily_df)} Trades", expanded=False):
+            with st.expander(f"{day_color} {date_str} | Net P&L: ${daily_net:.2f} (Gross: ${daily_gross:.2f}, Fees: ${daily_comm:.2f}, PF: {daily_pf}) | {len(daily_df)} Trades", expanded=False):
                 
                 st.markdown("### 🎯 Daily Pre-Market & Post-Market Routine")
                 col_goal, col_reflection = st.columns(2)
@@ -789,12 +958,25 @@ else:
                             st.markdown("---")
                             score_val = row['score']
                             score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, int(score_val), key=f"score_{trade_id}")
-                            
                             st.markdown("---")
                             
                             safe_trade_id = str(trade_id).replace("/", "-").replace("\\", "-")
                             
-                            screenshot = st.file_uploader("Attach/Replace Chart Image", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}")
+                            try:
+                                trade_dt = pd.to_datetime(timestamp)
+                                # --- THE FIX: Expanded time calculation for a 6 hour window ---
+                                start_time = trade_dt - timedelta(hours=3)
+                                end_time = trade_dt + timedelta(hours=3)
+                                market_df = get_market_data(instrument, start_time, end_time)
+                                
+                                if not market_df.empty:
+                                    st.markdown("### 📊 TradingView Interactive Chart")
+                                    html_chart = render_tradingview_chart(market_df, entry_time, exit_time, trade_type)
+                                    components.html(html_chart, height=420)
+                            except Exception as e:
+                                pass 
+                                
+                            screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}")
                             if screenshot is not None:
                                 for old_img in [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_trade_id)]:
                                     try: os.remove(os.path.join(IMAGE_DIR, old_img))
@@ -810,7 +992,6 @@ else:
                                     except: pass
 
                                 st.success("Image successfully moved and attached!")
-                                
                                 st.image(screenshot, caption="Execution Chart", use_container_width=True, output_format="PNG")
                                 
                                 absolute_path = os.path.abspath(file_path)
@@ -820,7 +1001,6 @@ else:
                                 existing_images = [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_trade_id)]
                                 if existing_images:
                                     img_path = os.path.join(IMAGE_DIR, existing_images[0])
-                                    
                                     st.image(img_path, caption="Saved Execution Chart", use_container_width=True, output_format="PNG")
                                     
                                     absolute_path = os.path.abspath(img_path)
