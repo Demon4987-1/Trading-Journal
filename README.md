@@ -17,6 +17,7 @@ This journal includes:
 - Core Trading Rules
 - Dashboard Filters (By instrument and trade score)
 - Historical Overview & Equity Curve (zoom in and out and info on each change when hovering the mouse)
+- Performance center tab (by time of day, by day of week, by instrument)
 - Trading Calendar that shows PNL and Win Rate
 - Daily Reviews & Trade Log (You can upload screenshots, there is a TradingView integration and some metrics like profit factor, MAE, MFE etc.)
 
