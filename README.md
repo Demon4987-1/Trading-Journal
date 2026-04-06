@@ -20,6 +20,8 @@ This journal includes:
 - Trading Calendar that shows PNL and Win Rate
 - Daily Reviews & Trade Log (You can upload screenshots)
 
+The TradingView Branch on this repository is the one I use, I branched it to be sure if there are bugs, I can get back to it but for me it works perfectly.
+
 To run it: (you can also ask any chat bot for help with this if struggling)
 
     Install Python and Streamlit.
