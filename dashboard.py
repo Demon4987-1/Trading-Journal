@@ -279,8 +279,8 @@ def get_market_data(instrument, start_time, end_time):
     conn.close()
     
     if not df.empty:
-        df['Datetime'] = pd.to_datetime(df['timestamp'], errors='coerce')
-        df['Datetime'] = df['Datetime'].dt.tz_localize(None) 
+        clean_time = df['timestamp'].astype(str).str.replace('T', ' ', regex=False).str.replace(r'(\+|-)\d{2}:\d{2}$|Z$', '', regex=True)
+        df['Datetime'] = pd.to_datetime(clean_time, errors='coerce')
         df = df.dropna(subset=['Datetime'])
         
         mask = (df['Datetime'] >= start_time) & (df['Datetime'] <= end_time)
@@ -579,8 +579,9 @@ def render_tradingview_chart(market_df, entry_time_str, exit_time_str, trade_typ
     candles_json = json.dumps(candles)
     markers_json = json.dumps(markers)
     
+    # THE FIX: Restored HTML container to 450px to perfectly match the right column's proportions
     html_template = f"""
-    <div id="tvchart" style="width: 100%; height: 400px; background-color: #131722;"></div>
+    <div id="tvchart" style="width: 100%; height: 450px; background-color: #131722;"></div>
     <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
     <script>
         try {{
@@ -974,6 +975,7 @@ else:
                     with st.container(border=True):
                         st.markdown(f"**{trade_color} {trade_type.upper()} Trade at {timestamp}**")
                         
+                        # --- THE FIX: We keep the 1 to 2.5 column ratio ---
                         col_details, col_journal = st.columns([1, 2.5])
                         
                         with col_details:
@@ -1001,19 +1003,8 @@ else:
                             
                             safe_trade_id = str(trade_id).replace("/", "-").replace("\\", "-")
                             
-                            try:
-                                trade_dt = pd.to_datetime(timestamp)
-                                start_time = trade_dt - timedelta(hours=12)
-                                end_time = trade_dt + timedelta(hours=12)
-                                market_df = get_market_data(instrument, start_time, end_time)
-                                
-                                if not market_df.empty:
-                                    st.markdown("### 📊 TradingView Interactive Chart")
-                                    html_chart = render_tradingview_chart(market_df, entry_time, exit_time, trade_type)
-                                    components.html(html_chart, height=420)
-                            except Exception as e:
-                                pass 
-                                
+                            # --- THE FIX: Removed the interactive chart from this narrow left column ---
+                            
                             screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}")
                             if screenshot is not None:
                                 for old_img in [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_trade_id)]:
@@ -1069,6 +1060,23 @@ else:
                             if st.button("Save Trade Review", key=f"btn_trade_{trade_id}", use_container_width=True):
                                 save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan)
                                 st.success("Trade review secured in vault!")
+                                
+                            st.markdown("---")
+                            
+                            # --- THE FIX: Placed the interactive chart here in the wide right column ---
+                            try:
+                                trade_dt = pd.to_datetime(timestamp)
+                                start_time = trade_dt - timedelta(hours=12)
+                                end_time = trade_dt + timedelta(hours=12)
+                                market_df = get_market_data(instrument, start_time, end_time)
+                                
+                                if not market_df.empty:
+                                    st.markdown("### 📊 TradingView Interactive Chart")
+                                    html_chart = render_tradingview_chart(market_df, entry_time, exit_time, trade_type)
+                                    # Height brought back down to 450px so it balances nicely next to the manual screenshot
+                                    components.html(html_chart, height=450)
+                            except Exception as e:
+                                pass 
                 
                 st.divider()
                 st.markdown("### ⚠️ Data Management")
