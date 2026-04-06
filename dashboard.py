@@ -223,7 +223,6 @@ def insert_market_data_to_db(df, instrument):
     conn.close()
     return inserted_count
 
-# --- THE FIX: Custom function to wipe out all bulky market data at once ---
 def delete_all_market_data():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -574,15 +573,22 @@ def render_tradingview_chart(market_df, entry_time_str, exit_time_str, trade_typ
     candles_json = json.dumps(candles)
     markers_json = json.dumps(markers)
     
+    # THE FIX: Updated to strictly follow Version 4's background syntax while pre-loading the div container dark
     html_template = f"""
-    <div id="tvchart" style="width: 100%; height: 400px;"></div>
+    <div id="tvchart" style="width: 100%; height: 400px; background-color: #131722;"></div>
     <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
     <script>
         try {{
             const chart = LightweightCharts.createChart(document.getElementById('tvchart'), {{
                 autoSize: true, 
-                layout: {{ backgroundColor: '#ffffff', textColor: '#333' }},
-                grid: {{ vertLines: {{ color: '#f0f3fa' }}, horzLines: {{ color: '#f0f3fa' }} }},
+                layout: {{ 
+                    background: {{ type: 'solid', color: '#131722' }}, 
+                    textColor: '#d1d4dc' 
+                }},
+                grid: {{ 
+                    vertLines: {{ color: '#2b2b43' }}, 
+                    horzLines: {{ color: '#2b2b43' }} 
+                }},
                 timeScale: {{ timeVisible: true, secondsVisible: false }},
             }});
             
@@ -623,7 +629,7 @@ with col_up1:
                 if not clean_df.empty:
                     new_trades = insert_trades_to_db(clean_df)
                     total_pnl_found = clean_df['P&L'].sum()
-                    st.success(f"Successfully processed! Added {new_trades} trades. (Gross P&L Found: ${total_pnl_found:.2f})")
+                    st.success(f"Successfully processed! Added {new_trades} trades. (Gross P&L: ${total_pnl_found:.2f})")
                     time.sleep(1.5)
                     st.rerun()
 
@@ -641,7 +647,6 @@ with col_up2:
                     st.success(f"Successfully processed {rows} minutes of market data for {ohlcv_instrument.upper()}!")
         
         st.markdown("---")
-        # THE FIX: A dedicated button to completely clear the market data cache.
         if st.button("🗑️ Clear All Saved Market Data", use_container_width=True):
             delete_all_market_data()
             st.success("All historical market data has been permanently erased from your vault!")
@@ -964,9 +969,8 @@ else:
                             
                             try:
                                 trade_dt = pd.to_datetime(timestamp)
-                                # --- THE FIX: Expanded time calculation for a 6 hour window ---
-                                start_time = trade_dt - timedelta(hours=3)
-                                end_time = trade_dt + timedelta(hours=3)
+                                start_time = trade_dt - timedelta(hours=12)
+                                end_time = trade_dt + timedelta(hours=12)
                                 market_df = get_market_data(instrument, start_time, end_time)
                                 
                                 if not market_df.empty:
