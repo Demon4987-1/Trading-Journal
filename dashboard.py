@@ -57,7 +57,8 @@ def init_db():
             score INTEGER DEFAULT 0,
             good_bad TEXT,
             improve TEXT,
-            action_plan TEXT
+            action_plan TEXT,
+            strategy TEXT DEFAULT 'Uncategorized'
         )
     ''')
     
@@ -133,6 +134,8 @@ def init_db():
     try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN improve TEXT")
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN action_plan TEXT")
+    except sqlite3.OperationalError: pass 
+    try: cursor.execute("ALTER TABLE journal_entries ADD COLUMN strategy TEXT DEFAULT 'Uncategorized'")
     except sqlite3.OperationalError: pass 
     try: cursor.execute("ALTER TABLE trading_rules ADD COLUMN prep_day TEXT")
     except sqlite3.OperationalError: pass 
@@ -234,7 +237,7 @@ def delete_all_market_data():
 def load_all_trades():
     conn = sqlite3.connect(DB_FILE)
     query = '''
-        SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan
+        SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy
         FROM trades t 
         LEFT JOIN journal_entries j ON t.trade_id = j.trade_id
     '''
@@ -265,29 +268,31 @@ def load_all_trades():
         df['good_bad'] = df['good_bad'].fillna("")
         df['improve'] = df['improve'].fillna("")
         df['action_plan'] = df['action_plan'].fillna("")
+        df['strategy'] = df['strategy'].fillna("Uncategorized")
         
     return df
 
+@st.cache_data
 def get_market_data(instrument, start_time, end_time):
     conn = sqlite3.connect(DB_FILE)
+    start_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+    end_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+    
     query = '''
         SELECT timestamp, open, high, low, close 
         FROM market_data 
-        WHERE instrument = ?
+        WHERE instrument = ? AND timestamp >= ? AND timestamp <= ?
     '''
-    df = pd.read_sql_query(query, conn, params=(instrument,))
+    df = pd.read_sql_query(query, conn, params=(instrument, start_str, end_str))
     conn.close()
     
     if not df.empty:
-        clean_time = df['timestamp'].astype(str).str.replace('T', ' ', regex=False).str.replace(r'(\+|-)\d{2}:\d{2}$|Z$', '', regex=True)
-        df['Datetime'] = pd.to_datetime(clean_time, errors='coerce')
+        df['Datetime'] = pd.to_datetime(df['timestamp'], errors='coerce')
         df = df.dropna(subset=['Datetime'])
-        
-        mask = (df['Datetime'] >= start_time) & (df['Datetime'] <= end_time)
-        df = df.loc[mask].sort_values(by='Datetime')
+        df = df.sort_values(by='Datetime')
     return df
 
-# --- THE FIX: Brand new function to isolate and calculate MAE and MFE mathematically ---
+@st.cache_data
 def calculate_mae_mfe(instrument, entry_time_str, exit_time_str, entry_price, trade_type):
     if entry_time_str == 'N/A' or exit_time_str == 'N/A' or entry_price == 0.0:
         return "N/A", "N/A"
@@ -296,11 +301,9 @@ def calculate_mae_mfe(instrument, entry_time_str, exit_time_str, entry_price, tr
         dt_in = pd.to_datetime(entry_time_str).replace(tzinfo=None)
         dt_out = pd.to_datetime(exit_time_str).replace(tzinfo=None)
         
-        # Failsafe: Ensure dt_in is always the smaller time
         if dt_in > dt_out:
             dt_in, dt_out = dt_out, dt_in
             
-        # Isolate ONLY the candles that occurred during the trade
         market_df = get_market_data(instrument, dt_in, dt_out)
         
         if market_df.empty:
@@ -318,7 +321,6 @@ def calculate_mae_mfe(instrument, entry_time_str, exit_time_str, entry_price, tr
         else:
             return "N/A", "N/A"
             
-        # Mathematical safety net to prevent fractional negative numbers due to minor data slippage
         mfe = max(0.0, mfe)
         mae = max(0.0, mae)
         
@@ -341,13 +343,13 @@ def delete_day_from_db(trade_ids):
     conn.commit()
     conn.close()
 
-def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan):
+def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan, strategy):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
-        REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (trade_id, notes, score, good_bad, improve, action_plan))
+        REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan, strategy)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (trade_id, notes, score, good_bad, improve, action_plan, strategy))
     conn.commit()
     conn.close()
 
@@ -673,6 +675,7 @@ with col_up1:
                 if not clean_df.empty:
                     new_trades = insert_trades_to_db(clean_df)
                     total_pnl_found = clean_df['P&L'].sum()
+                    st.cache_data.clear() 
                     st.success(f"Successfully processed! Added {new_trades} trades. (Gross P&L Found: ${total_pnl_found:.2f})")
                     time.sleep(1.5)
                     st.rerun()
@@ -688,11 +691,13 @@ with col_up2:
                 clean_ohlcv = clean_ohlcv_data(raw_ohlcv)
                 if not clean_ohlcv.empty:
                     rows = insert_market_data_to_db(clean_ohlcv, ohlcv_instrument.upper())
+                    st.cache_data.clear() 
                     st.success(f"Successfully processed {rows} minutes of market data for {ohlcv_instrument.upper()}!")
         
         st.markdown("---")
         if st.button("🗑️ Clear All Saved Market Data", use_container_width=True):
             delete_all_market_data()
+            st.cache_data.clear()
             st.success("All historical market data has been permanently erased from your vault!")
             time.sleep(1.5)
             st.rerun()
@@ -903,6 +908,30 @@ else:
         fig_equity.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
         
         st.plotly_chart(fig_equity, use_container_width=True)
+        
+        st.markdown("### 🎯 Trading Expectancy by Strategy")
+        
+        strat_cols = st.columns(4)
+        strategies_to_track = ["Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Uncategorized"]
+        
+        for i, strat in enumerate(strategies_to_track):
+            strat_df = master_df[master_df['strategy'] == strat]
+            if len(strat_df) == 0:
+                strat_cols[i].metric(f"{strat}", "$0.00", "0 Trades")
+                continue
+                
+            wins = strat_df[strat_df['Net_PnL'] > 0]
+            losses = strat_df[strat_df['Net_PnL'] <= 0]
+            
+            win_rate = len(wins) / len(strat_df)
+            loss_rate = len(losses) / len(strat_df)
+            
+            avg_win = wins['Net_PnL'].mean() if not wins.empty else 0.0
+            avg_loss = abs(losses['Net_PnL'].mean()) if not losses.empty else 0.0
+            
+            expectancy = (win_rate * avg_win) - (loss_rate * avg_loss)
+            
+            strat_cols[i].metric(f"{strat}", f"${expectancy:.2f} / trade", f"{len(strat_df)} Trades")
 
         st.divider()
 
@@ -954,9 +983,32 @@ else:
         st.header("Daily Reviews & Trade Log")
         
         master_df['Date_str'] = master_df['Datetime'].dt.strftime('%A, %B %d, %Y')
-        unique_dates = master_df['Date_str'].unique()
+        all_unique_dates = list(master_df['Date_str'].unique())
         
-        for date_str in reversed(unique_dates):
+        # --- THE FIX: DOM UI Overload Prevention (View Mode Filter) ---
+        st.markdown("To prevent browser freezing with massive amounts of trades, please select a focused view range for your log:")
+        col_view1, col_view2 = st.columns([1, 2])
+        
+        with col_view1:
+            view_mode = st.selectbox("Trade Log View Range", ["Show Most Recent 3 Days", "Show Specific Date", "Show Entire Selected Month"])
+            
+        dates_to_show = []
+        if view_mode == "Show Most Recent 3 Days":
+            # The dates are natively ordered newest to oldest, so we just slice the first 3
+            dates_to_show = all_unique_dates[::-1][:3] 
+        elif view_mode == "Show Specific Date":
+            with col_view2:
+                selected_review_date = st.selectbox("Select Exact Date to Audit", all_unique_dates[::-1])
+            dates_to_show = [selected_review_date]
+        else:
+            # Revert to showing the entire month selected in the calendar
+            month_df_filtered = master_df[master_df['Month_Year'] == selected_month]
+            dates_to_show = list(month_df_filtered['Date_str'].unique())[::-1]
+            if not dates_to_show:
+                st.info(f"No trades found in {selected_month} to display.")
+
+        # The loop now only builds the UI for the mathematically isolated dates
+        for date_str in dates_to_show:
             daily_df = master_df[master_df['Date_str'] == date_str]
             
             daily_gross = daily_df['P&L'].sum()
@@ -1028,7 +1080,6 @@ else:
                             st.write(f"**In:** {entry_price} @ {entry_time}")
                             st.write(f"**Out:** {exit_price} @ {exit_time}")
                             
-                            # --- THE FIX: We dynamically calculate and inject MAE/MFE here ---
                             mfe_val, mae_val = calculate_mae_mfe(instrument, entry_time, exit_time, entry_price, trade_type)
                             if mfe_val != "N/A":
                                 st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts")
@@ -1042,6 +1093,13 @@ else:
                                 st.rerun()
                                 
                             st.markdown("---")
+                            
+                            strategy_options = ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR"]
+                            strat_val = row.get('strategy', 'Uncategorized')
+                            if strat_val not in strategy_options: 
+                                strat_val = "Uncategorized"
+                                
+                            strategy_choice = st.selectbox("Strategy Category", strategy_options, index=strategy_options.index(strat_val), key=f"strat_{trade_id}")
                             score_val = row['score']
                             score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, int(score_val), key=f"score_{trade_id}")
                             st.markdown("---")
@@ -1101,23 +1159,28 @@ else:
                             general_notes = st.text_area("Additional Notes / Chart Links:", value=row['notes'], key=f"gen_{trade_id}", height=68)
                             
                             if st.button("Save Trade Review", key=f"btn_trade_{trade_id}", use_container_width=True):
-                                save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan)
-                                st.success("Trade review secured in vault!")
+                                save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice)
+                                st.success("Trade review and strategy categorizations secured in vault!")
+                                time.sleep(1)
+                                st.rerun()
                                 
                             st.markdown("---")
                             
-                            try:
-                                trade_dt = pd.to_datetime(timestamp)
-                                start_time = trade_dt - timedelta(hours=16)
-                                end_time = trade_dt + timedelta(hours=16)
-                                market_df = get_market_data(instrument, start_time, end_time)
-                                
-                                if not market_df.empty:
-                                    st.markdown("### 📊 TradingView Interactive Chart")
-                                    html_chart = render_tradingview_chart(market_df, entry_time, exit_time, trade_type)
-                                    components.html(html_chart, height=450)
-                            except Exception as e:
-                                pass 
+                            if st.checkbox("📈 Load Interactive TradingView Chart", key=f"show_chart_{trade_id}"):
+                                try:
+                                    trade_dt = pd.to_datetime(timestamp)
+                                    start_time = trade_dt - timedelta(hours=16)
+                                    end_time = trade_dt + timedelta(hours=16)
+                                    market_df = get_market_data(instrument, start_time, end_time)
+                                    
+                                    if not market_df.empty:
+                                        st.markdown("### 📊 TradingView Interactive Chart")
+                                        html_chart = render_tradingview_chart(market_df, entry_time, exit_time, trade_type)
+                                        components.html(html_chart, height=450)
+                                    else:
+                                        st.warning("No market data available for this 32-hour window.")
+                                except Exception as e:
+                                    pass 
                 
                 st.divider()
                 st.markdown("### ⚠️ Data Management")
