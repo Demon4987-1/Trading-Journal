@@ -933,6 +933,89 @@ else:
             
             strat_cols[i].metric(f"{strat}", f"${expectancy:.2f} / trade", f"{len(strat_df)} Trades")
 
+        # --- THE FIX: Performance Analytics Center Integrated ---
+        st.divider()
+        st.header("🏆 Performance Analytics Center")
+        
+        if len(master_df) > 0:
+            # 1. Best & Worst Trades Engine
+            st.subheader("1. Best & Worst Executions")
+            best_trade = master_df.loc[master_df['Net_PnL'].idxmax()]
+            worst_trade = master_df.loc[master_df['Net_PnL'].idxmin()]
+            
+            col_bw1, col_bw2 = st.columns(2)
+            with col_bw1:
+                st.success(f"**🟢 Best Trade:** +${best_trade['Net_PnL']:.2f}")
+                st.write(f"**Date:** {best_trade['Timestamp']}")
+                st.write(f"**Instrument:** {best_trade['Instrument']} (Qty: {best_trade['Qty']})")
+                
+            with col_bw2:
+                st.error(f"**🔴 Worst Trade:** ${worst_trade['Net_PnL']:.2f}")
+                st.write(f"**Date:** {worst_trade['Timestamp']}")
+                st.write(f"**Instrument:** {worst_trade['Instrument']} (Qty: {worst_trade['Qty']})")
+                
+            # 2. Performance by Time of Day (15-Minute Floor Aggregation)
+            st.subheader("2. Performance by Time of Day (15-Minute Increments)")
+            perf_df = master_df.copy()
+            perf_df['Time_15m'] = perf_df['Datetime'].dt.floor('15min').dt.time
+            time_df = perf_df.groupby('Time_15m')['Net_PnL'].sum().reset_index()
+            time_df['Time_str'] = time_df['Time_15m'].astype(str).str[:5]
+            
+            fig_time = go.Figure(data=[go.Bar(
+                x=time_df['Time_str'], 
+                y=time_df['Net_PnL'], 
+                marker_color=['#26a69a' if val >= 0 else '#ef5350' for val in time_df['Net_PnL']]
+            )])
+            fig_time.update_layout(
+                height=300, margin=dict(l=0, r=0, t=10, b=0),
+                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(title='Time of Day (15m blocks)', tickangle=-45),
+                yaxis=dict(title='Net P&L ($)', tickprefix="$")
+            )
+            fig_time.update_xaxes(showgrid=False)
+            fig_time.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+            st.plotly_chart(fig_time, use_container_width=True)
+            
+            col_perf1, col_perf2 = st.columns(2)
+            
+            # 3. Performance by Day of the Week
+            with col_perf1:
+                st.subheader("3. Performance by Day of Week")
+                perf_df['Day_Name'] = perf_df['Datetime'].dt.day_name()
+                days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+                day_df = perf_df.groupby('Day_Name')['Net_PnL'].sum().reindex(days_order).dropna().reset_index()
+                
+                fig_day = go.Figure(data=[go.Bar(
+                    x=day_df['Day_Name'], 
+                    y=day_df['Net_PnL'], 
+                    marker_color=['#26a69a' if val >= 0 else '#ef5350' for val in day_df['Net_PnL']]
+                )])
+                fig_day.update_layout(
+                    height=300, margin=dict(l=0, r=0, t=10, b=0),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                    yaxis=dict(tickprefix="$")
+                )
+                fig_day.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+                st.plotly_chart(fig_day, use_container_width=True)
+                
+            # 4. Performance by Instrument
+            with col_perf2:
+                st.subheader("4. Performance by Instrument")
+                inst_df = perf_df.groupby('Instrument')['Net_PnL'].sum().reset_index()
+                
+                fig_inst = go.Figure(data=[go.Bar(
+                    x=inst_df['Instrument'], 
+                    y=inst_df['Net_PnL'], 
+                    marker_color=['#26a69a' if val >= 0 else '#ef5350' for val in inst_df['Net_PnL']]
+                )])
+                fig_inst.update_layout(
+                    height=300, margin=dict(l=0, r=0, t=10, b=0),
+                    plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+                    yaxis=dict(tickprefix="$")
+                )
+                fig_inst.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+                st.plotly_chart(fig_inst, use_container_width=True)
+
         st.divider()
 
         st.header("📅 Trading Calendar")
@@ -985,7 +1068,6 @@ else:
         master_df['Date_str'] = master_df['Datetime'].dt.strftime('%A, %B %d, %Y')
         all_unique_dates = list(master_df['Date_str'].unique())
         
-        # --- THE FIX: DOM UI Overload Prevention (View Mode Filter) ---
         st.markdown("To prevent browser freezing with massive amounts of trades, please select a focused view range for your log:")
         col_view1, col_view2 = st.columns([1, 2])
         
@@ -994,20 +1076,17 @@ else:
             
         dates_to_show = []
         if view_mode == "Show Most Recent 3 Days":
-            # The dates are natively ordered newest to oldest, so we just slice the first 3
             dates_to_show = all_unique_dates[::-1][:3] 
         elif view_mode == "Show Specific Date":
             with col_view2:
                 selected_review_date = st.selectbox("Select Exact Date to Audit", all_unique_dates[::-1])
             dates_to_show = [selected_review_date]
         else:
-            # Revert to showing the entire month selected in the calendar
             month_df_filtered = master_df[master_df['Month_Year'] == selected_month]
             dates_to_show = list(month_df_filtered['Date_str'].unique())[::-1]
             if not dates_to_show:
                 st.info(f"No trades found in {selected_month} to display.")
 
-        # The loop now only builds the UI for the mathematically isolated dates
         for date_str in dates_to_show:
             daily_df = master_df[master_df['Date_str'] == date_str]
             
