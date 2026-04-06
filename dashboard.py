@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import time
 import re
 import json
+import plotly.graph_objects as go
 
 # --- Configuration & Setup ---
 st.set_page_config(page_title="Trading Journal Vault", layout="wide")
@@ -528,6 +529,11 @@ def clean_ohlcv_data(df):
             return pd.DataFrame()
             
     df = df.dropna(subset=['Timestamp']).copy()
+    
+    clean_time = df['Timestamp'].astype(str).str.replace('T', ' ', regex=False).str.replace(r'(\+|-)\d{2}:\d{2}$|Z$', '', regex=True)
+    df['Timestamp'] = pd.to_datetime(clean_time, errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
+    df = df.dropna(subset=['Timestamp'])
+    
     for col in ['Open', 'High', 'Low', 'Close']:
         df[col] = df[col].apply(force_float)
     return df
@@ -573,7 +579,6 @@ def render_tradingview_chart(market_df, entry_time_str, exit_time_str, trade_typ
     candles_json = json.dumps(candles)
     markers_json = json.dumps(markers)
     
-    # THE FIX: Updated to strictly follow Version 4's background syntax while pre-loading the div container dark
     html_template = f"""
     <div id="tvchart" style="width: 100%; height: 400px; background-color: #131722;"></div>
     <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
@@ -629,7 +634,7 @@ with col_up1:
                 if not clean_df.empty:
                     new_trades = insert_trades_to_db(clean_df)
                     total_pnl_found = clean_df['P&L'].sum()
-                    st.success(f"Successfully processed! Added {new_trades} trades. (Gross P&L: ${total_pnl_found:.2f})")
+                    st.success(f"Successfully processed! Added {new_trades} trades. (Gross P&L Found: ${total_pnl_found:.2f})")
                     time.sleep(1.5)
                     st.rerun()
 
@@ -829,7 +834,36 @@ else:
 
         st.subheader("Cumulative Net P&L")
         master_df['Cumulative Net P&L'] = master_df['Net_PnL'].cumsum()
-        st.line_chart(master_df, x='Datetime', y='Cumulative Net P&L')
+        
+        fig_equity = go.Figure()
+        fig_equity.add_trace(go.Scatter(
+            x=master_df['Datetime'], 
+            y=master_df['Cumulative Net P&L'], 
+            mode='lines',
+            fill='tozeroy',
+            line=dict(color='#26a69a', width=3),
+            fillcolor='rgba(38, 166, 154, 0.1)',
+            name='Cumulative P&L'
+        ))
+        
+        fig_equity.update_layout(
+            height=400,
+            margin=dict(l=0, r=0, t=10, b=0),
+            xaxis=dict(
+                type='date',
+                rangebreaks=[
+                    dict(bounds=["sat", "sun"])
+                ]
+            ),
+            yaxis=dict(tickprefix="$"),
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        
+        fig_equity.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+        fig_equity.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
+        
+        st.plotly_chart(fig_equity, use_container_width=True)
 
         st.divider()
 
