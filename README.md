@@ -18,7 +18,7 @@ This journal includes:
 - Dashboard Filters (By instrument and trade score)
 - Historical Overview & Equity Curve (zoom in and out and info on each change when hovering the mouse)
 - Trading Calendar that shows PNL and Win Rate
-- Daily Reviews & Trade Log (You can upload screenshots)
+- Daily Reviews & Trade Log (You can upload screenshots, there is a TradingView integration and some metrics like profit factor, MAE, MFE etc.)
 
 The TradingView Branch on this repository is the one I use, I branched it to be sure if there are bugs, I can get back to it but for me it works perfectly.
 
