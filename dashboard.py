@@ -81,6 +81,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# --- Utility Functions for Parsing Numbers and Durations ---
 def force_float(val):
     if pd.isna(val): return 0.0
     val_str = str(val)
@@ -89,6 +90,32 @@ def force_float(val):
     if not num_str: return 0.0
     try: return -float(num_str) if is_negative else float(num_str)
     except: return 0.0
+
+def fmt_dollar(val):
+    return f"${val:.2f}" if val >= 0 else f"-${abs(val):.2f}"
+
+def parse_duration_to_seconds(d_str):
+    if pd.isna(d_str) or str(d_str).strip() == 'N/A': return 0
+    d_str = str(d_str).lower()
+    hrs = re.search(r'(\d+)\s*hr', d_str)
+    mins = re.search(r'(\d+)\s*min', d_str)
+    secs = re.search(r'(\d+)\s*sec', d_str)
+    h = int(hrs.group(1)) if hrs else 0
+    m = int(mins.group(1)) if mins else 0
+    s = int(secs.group(1)) if secs else 0
+    return h * 3600 + m * 60 + s
+
+def format_seconds_to_duration(total_seconds):
+    if pd.isna(total_seconds) or total_seconds <= 0: return "0sec"
+    total_seconds = int(total_seconds)
+    h = total_seconds // 3600
+    m = (total_seconds % 3600) // 60
+    s = total_seconds % 60
+    parts = []
+    if h > 0: parts.append(f"{h}hr")
+    if m > 0: parts.append(f"{m}min")
+    if s > 0 or (h == 0 and m == 0): parts.append(f"{s}sec")
+    return " ".join(parts)
 
 def clean_and_prepare_data(df):
     df.columns = df.columns.astype(str).str.encode('ascii', 'ignore').str.decode('ascii').str.strip()
@@ -125,7 +152,6 @@ def clean_and_prepare_data(df):
             
     for col in ['Entry_Time', 'Exit_Time']:
         if col in df.columns:
-            # Row-by-row isolation parsing to perfectly parse Tradovate timestamps
             df[col] = df[col].apply(pd.to_datetime, errors='coerce')
             
     if 'Entry_Time' not in df.columns and 'Exit_Time' not in df.columns:
@@ -698,22 +724,45 @@ else:
         fig_equity.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
         st.plotly_chart(fig_equity, use_container_width=True)
         
-        st.markdown("### 🎯 Trading Expectancy by Strategy")
+        # --- THE FIX: Upgraded Strategies Review with Deep Analytics ---
+        st.markdown("### 🎯 Strategies Review")
         strategies_to_track = ["Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Uncategorized"]
         strat_cols = st.columns(len(strategies_to_track))
+        
         for i, strat in enumerate(strategies_to_track):
             strat_df = master_df[master_df['strategy'] == strat]
-            if len(strat_df) == 0:
-                strat_cols[i].metric(f"{strat}", "$0.00", "0 Trades")
-                continue
-            wins = strat_df[strat_df['Net_PnL'] > 0]
-            losses = strat_df[strat_df['Net_PnL'] <= 0]
-            win_rate = len(wins) / len(strat_df)
-            loss_rate = len(losses) / len(strat_df)
-            avg_win = wins['Net_PnL'].mean() if not wins.empty else 0.0
-            avg_loss = abs(losses['Net_PnL'].mean()) if not losses.empty else 0.0
-            expectancy = (win_rate * avg_win) - (loss_rate * avg_loss)
-            strat_cols[i].metric(f"{strat}", f"${expectancy:.2f} / trade", f"{len(strat_df)} Trades")
+            with strat_cols[i]:
+                if len(strat_df) == 0:
+                    st.metric(f"{strat}", "$0.00", "0 Trades")
+                    continue
+                
+                wins = strat_df[strat_df['Net_PnL'] > 0]
+                losses = strat_df[strat_df['Net_PnL'] <= 0]
+                
+                win_rate = len(wins) / len(strat_df)
+                loss_rate = len(losses) / len(strat_df)
+                
+                avg_win = wins['Net_PnL'].mean() if not wins.empty else 0.0
+                avg_loss = abs(losses['Net_PnL'].mean()) if not losses.empty else 0.0
+                expectancy = (win_rate * avg_win) - (loss_rate * avg_loss)
+                
+                best_t = strat_df['Net_PnL'].max()
+                worst_t = strat_df['Net_PnL'].min()
+                
+                win_secs = wins['Duration'].apply(parse_duration_to_seconds).mean() if not wins.empty else 0
+                loss_secs = losses['Duration'].apply(parse_duration_to_seconds).mean() if not losses.empty else 0
+                
+                st.metric(f"{strat}", f"{fmt_dollar(expectancy)} / trade", f"{len(strat_df)} Trades")
+                st.markdown(f"""
+                <div style="font-size:0.9em; line-height:1.5;">
+                <b>Avg Win:</b> {fmt_dollar(avg_win)}<br>
+                <b>Avg Loss:</b> {fmt_dollar(-avg_loss)}<br>
+                <b>Best Trade:</b> {fmt_dollar(best_t)}<br>
+                <b>Worst Trade:</b> {fmt_dollar(worst_t)}<br>
+                <b>Avg Dur (W):</b> {format_seconds_to_duration(win_secs)}<br>
+                <b>Avg Dur (L):</b> {format_seconds_to_duration(loss_secs)}
+                </div>
+                """, unsafe_allow_html=True)
 
         st.divider()
         st.header("🏆 Performance Analytics Center")
@@ -851,10 +900,8 @@ else:
                     entry_price, exit_price = row['Entry_Price'], row['Exit_Price']
                     trade_color = "🟢" if net_pnl >= 0 else "🔴"
                     
-                    # THE FIX: Change st.container to st.expander to make individual trades collapsible
                     with st.expander(f"{trade_color} {trade_type.upper()} {instrument} Trade at {timestamp} | Net: ${net_pnl:.2f}", expanded=False):
                         col_details, col_journal = st.columns([1, 2.5])
-                        
                         with col_details:
                             st.write(f"**Instrument:** {instrument}")
                             st.write(f"**Type:** {trade_type}")
@@ -867,7 +914,6 @@ else:
                             st.markdown("---")
                             st.write(f"**In:** {entry_price} @ {entry_time}")
                             st.write(f"**Out:** {exit_price} @ {exit_time}")
-                            
                             mfe_val, mae_val = calculate_mae_mfe(instrument, entry_time, exit_time, entry_price, trade_type)
                             if mfe_val != "N/A": st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts\n**MAE (Max Heat):** -{mae_val:.2f} pts")
                             else: st.write("**MFE / MAE:** No market data for window")
