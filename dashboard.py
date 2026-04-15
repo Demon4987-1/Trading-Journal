@@ -704,16 +704,26 @@ else:
         total_commissions = master_df['Commission'].sum()
         total_net = master_df['Net_PnL'].sum()
         total_trades = len(master_df)
+        
         total_gross_profit = master_df[master_df['P&L'] > 0]['P&L'].sum()
         total_gross_loss = abs(master_df[master_df['P&L'] < 0]['P&L'].sum())
         all_time_pf = "∞" if total_gross_loss == 0 and total_gross_profit > 0 else "0.00" if total_gross_loss == 0 else f"{(total_gross_profit / total_gross_loss):.2f}"
         
-        col1, col2, col3, col4, col5 = st.columns(5)
+        winning_trades_count = len(master_df[master_df['P&L'] > 0])
+        losing_trades_count = len(master_df[master_df['P&L'] <= 0])
+        win_rate_val = f"{(len(master_df[master_df['Net_PnL'] > 0]) / total_trades * 100):.1f}%" if total_trades > 0 else "0%"
+        
+        col1, col2, col3, col4 = st.columns(4)
         col1.metric("Gross P&L", f"${total_gross:.2f}")
         col2.metric("Commissions", f"-${total_commissions:.2f}")
         col3.metric("Net P&L", f"${total_net:.2f}")
-        col4.metric("Win Rate", f"{(len(master_df[master_df['Net_PnL'] > 0]) / total_trades * 100):.1f}%" if total_trades > 0 else "0%")
-        col5.metric("Profit Factor", all_time_pf)
+        col4.metric("Total Trades", f"{total_trades}")
+        
+        col5, col6, col7, col8 = st.columns(4)
+        col5.metric("Win Rate", win_rate_val)
+        col6.metric("Profit Factor", all_time_pf)
+        col7.metric("Gross Winning Trades", f"{winning_trades_count}")
+        col8.metric("Gross Losing Trades", f"{losing_trades_count}")
 
         st.subheader("Cumulative Net P&L")
         master_df['Cumulative Net P&L'] = master_df['Net_PnL'].cumsum()
@@ -724,9 +734,10 @@ else:
         fig_equity.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
         st.plotly_chart(fig_equity, use_container_width=True)
         
-        # --- THE FIX: Upgraded Strategies Review with Deep Analytics ---
         st.markdown("### 🎯 Strategies Review")
-        strategies_to_track = ["Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Uncategorized"]
+        
+        # --- THE FIX: Added "Counter Trend" to the mathematical engine list ---
+        strategies_to_track = ["Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend", "Uncategorized"]
         strat_cols = st.columns(len(strategies_to_track))
         
         for i, strat in enumerate(strategies_to_track):
@@ -814,7 +825,14 @@ else:
         selected_month = st.selectbox("Select Month to View", months, index=default_idx)
         month_df = master_df[master_df['Month_Year'] == selected_month].copy()
         month_df['Day'] = month_df['Datetime'].dt.day
-        daily_stats = month_df.groupby('Day').agg(Daily_Net=('Net_PnL', 'sum'), Trade_Count=('Net_PnL', 'count'))
+        
+        month_df['Is_Win'] = (month_df['Net_PnL'] > 0).astype(int)
+        daily_stats = month_df.groupby('Day').agg(
+            Daily_Net=('Net_PnL', 'sum'), 
+            Trade_Count=('Net_PnL', 'count'),
+            Win_Count=('Is_Win', 'sum')
+        )
+        daily_stats['Win_Rate'] = (daily_stats['Win_Count'] / daily_stats['Trade_Count']) * 100
         
         if not month_df.empty:
             sample_date = month_df['Datetime'].iloc[0]
@@ -830,9 +848,11 @@ else:
                     elif day in daily_stats.index:
                         net_pnl = daily_stats.loc[day, 'Daily_Net']
                         trades = daily_stats.loc[day, 'Trade_Count']
-                        if net_pnl > 0: week_cols[i].success(f"**{day}** \n+${net_pnl:.2f}  \n{trades} trades")
-                        elif net_pnl < 0: week_cols[i].error(f"**{day}** \n${net_pnl:.2f}  \n{trades} trades")
-                        else: week_cols[i].info(f"**{day}** \n$0.00  \n{trades} trades")
+                        win_rate = daily_stats.loc[day, 'Win_Rate']
+                        
+                        if net_pnl > 0: week_cols[i].success(f"**{day}** \n+${net_pnl:.2f}  \n{trades} trades  \nWR: {win_rate:.0f}%")
+                        elif net_pnl < 0: week_cols[i].error(f"**{day}** \n${net_pnl:.2f}  \n{trades} trades  \nWR: {win_rate:.0f}%")
+                        else: week_cols[i].info(f"**{day}** \n$0.00  \n{trades} trades  \nWR: {win_rate:.0f}%")
                     else: week_cols[i].markdown(f"<div style='text-align: center; padding: 10px; color: gray;'><b>{day}</b><br><br><br></div>", unsafe_allow_html=True)
                         
         st.divider()
@@ -861,16 +881,26 @@ else:
             if not dates_to_show: st.info(f"No trades found in {selected_review_month} to display.")
 
         for date_str in dates_to_show:
-            daily_df = master_df[master_df['Date_str'] == date_str]
+            daily_df = master_df[master_df['Date_str'] == date_str].copy()
+            
+            daily_df = daily_df.sort_values(by='Datetime', ascending=True).reset_index(drop=True)
+            daily_df['PnL_So_Far'] = daily_df['Net_PnL'].cumsum().shift(1).fillna(0.0)
+            
             daily_gross = daily_df['P&L'].sum()
             daily_comm = daily_df['Commission'].sum()
             daily_net = daily_df['Net_PnL'].sum()
             daily_gross_profit = daily_df[daily_df['P&L'] > 0]['P&L'].sum()
             daily_gross_loss = abs(daily_df[daily_df['P&L'] < 0]['P&L'].sum())
             daily_pf = "∞" if daily_gross_loss == 0 and daily_gross_profit > 0 else "0.00" if daily_gross_loss == 0 else f"{(daily_gross_profit / daily_gross_loss):.2f}"
+            
+            daily_total_trades = len(daily_df)
+            daily_win_count = len(daily_df[daily_df['P&L'] > 0])
+            daily_loss_count = len(daily_df[daily_df['P&L'] <= 0])
+            daily_wr = f"{(len(daily_df[daily_df['Net_PnL'] > 0]) / daily_total_trades * 100):.0f}%" if daily_total_trades > 0 else "0%"
+            
             day_color = "🟢" if daily_net >= 0 else "🔴"
             
-            with st.expander(f"{day_color} {date_str} | Net P&L: ${daily_net:.2f} (Gross: ${daily_gross:.2f}, Fees: ${daily_comm:.2f}, PF: {daily_pf}) | {len(daily_df)} Trades", expanded=False):
+            with st.expander(f"{day_color} {date_str} | Net P&L: ${daily_net:.2f} (Gross: ${daily_gross:.2f}, Fees: -${daily_comm:.2f}, PF: {daily_pf}, WR: {daily_wr}) | {daily_total_trades} Trades ({daily_win_count}W, {daily_loss_count}L)", expanded=False):
                 st.markdown("### 🎯 Daily Pre-Market & Post-Market Routine")
                 col_goal, col_reflection = st.columns(2)
                 existing_goal, existing_reflection = get_daily_note_from_db(date_str)
@@ -882,6 +912,7 @@ else:
                 
                 st.divider()
                 st.markdown("### 📊 Trade Executions")
+                
                 display_df = daily_df.copy()
                 if outcome_filter == "Profitable Only (Gross > $0)": display_df = display_df[display_df['P&L'] > 0]
                 elif outcome_filter == "Losing Only (Gross <= $0)": display_df = display_df[display_df['P&L'] <= 0]
@@ -898,22 +929,42 @@ else:
                     duration, qty, trade_type = row['Duration'], row['Qty'], row.get('trade_type', 'Unknown')
                     entry_time, exit_time = row['Entry_Time'], row['Exit_Time']
                     entry_price, exit_price = row['Entry_Price'], row['Exit_Price']
+                    pnl_so_far = row['PnL_So_Far']
+                    
                     trade_color = "🟢" if net_pnl >= 0 else "🔴"
                     
-                    with st.expander(f"{trade_color} {trade_type.upper()} {instrument} Trade at {timestamp} | Net: ${net_pnl:.2f}", expanded=False):
+                    pnl_so_far_str = f"+${pnl_so_far:.2f}" if pnl_so_far > 0 else (f"-${abs(pnl_so_far):.2f}" if pnl_so_far < 0 else "$0.00")
+                    
+                    if net_pnl > 0: net_pnl_colored = f":green[+${net_pnl:.2f}]"
+                    elif net_pnl < 0: net_pnl_colored = f":red[-${abs(net_pnl):.2f}]"
+                    else: net_pnl_colored = "$0.00"
+                        
+                    if pnl_so_far > 0: pnl_so_far_colored = f":green[+${pnl_so_far:.2f}]"
+                    elif pnl_so_far < 0: pnl_so_far_colored = f":red[-${abs(pnl_so_far):.2f}]"
+                    else: pnl_so_far_colored = "$0.00"
+                    
+                    with st.expander(f"{trade_color} {trade_type.upper()} {instrument} Trade at {timestamp} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}", expanded=False):
                         col_details, col_journal = st.columns([1, 2.5])
+                        
                         with col_details:
-                            st.write(f"**Instrument:** {instrument}")
-                            st.write(f"**Type:** {trade_type}")
-                            st.write(f"**Qty:** {qty}")
-                            st.write(f"**Duration:** {duration}")
+                            st.markdown(f"**Instrument:** {instrument}")
+                            st.markdown(f"**Type:** {trade_type}")
+                            st.markdown(f"**Qty:** {qty}")
+                            st.markdown(f"**Duration:** {duration}")
                             st.markdown("---")
-                            st.write(f"**Gross P&L:** ${gross_pnl:.2f}")
-                            st.write(f"**Fees:** -${comm:.2f}")
-                            st.write(f"**Net P&L:** ${net_pnl:.2f}")
+                            st.markdown(f"**Gross P&L:** ${gross_pnl:.2f}")
+                            st.markdown(f"**Fees:** -${comm:.2f}")
+                            
+                            net_color = "#26a69a" if net_pnl >= 0 else "#ef5350"
+                            so_far_color = "#26a69a" if pnl_so_far >= 0 else "#ef5350"
+                            
+                            st.markdown(f"**Net P&L:** <span style='color:{net_color}; font-size:1.1em; font-weight:bold;'>${net_pnl:.2f}</span>", unsafe_allow_html=True)
+                            st.markdown(f"**PNL So Far:** <span style='color:{so_far_color}; font-weight:bold;'>{pnl_so_far_str}</span>", unsafe_allow_html=True)
+                            
                             st.markdown("---")
-                            st.write(f"**In:** {entry_price} @ {entry_time}")
-                            st.write(f"**Out:** {exit_price} @ {exit_time}")
+                            st.markdown(f"**In:** {entry_price} @ {entry_time}")
+                            st.markdown(f"**Out:** {exit_price} @ {exit_time}")
+                            
                             mfe_val, mae_val = calculate_mae_mfe(instrument, entry_time, exit_time, entry_price, trade_type)
                             if mfe_val != "N/A": st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts\n**MAE (Max Heat):** -{mae_val:.2f} pts")
                             else: st.write("**MFE / MAE:** No market data for window")
@@ -923,7 +974,8 @@ else:
                                 st.rerun()
                             st.markdown("---")
                             
-                            strategy_options = ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout"]
+                            # --- THE FIX: Added "Counter Trend" to the drop down selector ---
+                            strategy_options = ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"]
                             strat_val = row.get('strategy', 'Uncategorized')
                             if strat_val not in strategy_options: strat_val = "Uncategorized"
                             strategy_choice = st.selectbox("Strategy Category", strategy_options, index=strategy_options.index(strat_val), key=f"strat_{trade_id}")
