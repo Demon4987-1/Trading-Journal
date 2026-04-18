@@ -735,8 +735,6 @@ else:
         st.plotly_chart(fig_equity, use_container_width=True)
         
         st.markdown("### 🎯 Strategies Review")
-        
-        # --- THE FIX: Added "Counter Trend" to the mathematical engine list ---
         strategies_to_track = ["Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend", "Uncategorized"]
         strat_cols = st.columns(len(strategies_to_track))
         
@@ -862,7 +860,7 @@ else:
         all_unique_dates = list(master_df['Date_str'].unique())
         
         col_view1, col_view2, col_view3, col_view4 = st.columns(4)
-        with col_view1: view_mode = st.selectbox("Trade Log View Range", ["Show Most Recent 3 Days", "Show Specific Date", "Show Specific Month"])
+        with col_view1: view_mode = st.selectbox("Trade Log View Range", ["Show Most Recent 3 Days", "Show Specific Date", "Show Specific Month"], index=1)
         with col_view2:
             if view_mode == "Show Specific Date": selected_review_date = st.selectbox("Select Exact Date to Audit", all_unique_dates[::-1])
             elif view_mode == "Show Specific Month": selected_review_month = st.selectbox("Select Exact Month to Audit", list(master_df['Month_Year'].unique())[::-1])
@@ -898,9 +896,17 @@ else:
             daily_loss_count = len(daily_df[daily_df['P&L'] <= 0])
             daily_wr = f"{(len(daily_df[daily_df['Net_PnL'] > 0]) / daily_total_trades * 100):.0f}%" if daily_total_trades > 0 else "0%"
             
+            daily_winning_trades = daily_df[daily_df['Net_PnL'] > 0]
+            daily_losing_trades = daily_df[daily_df['Net_PnL'] < 0]
+            daily_max_win = daily_winning_trades['Net_PnL'].max() if not daily_winning_trades.empty else 0.0
+            daily_max_loss = daily_losing_trades['Net_PnL'].min() if not daily_losing_trades.empty else 0.0
+            
             day_color = "🟢" if daily_net >= 0 else "🔴"
             
-            with st.expander(f"{day_color} {date_str} | Net P&L: ${daily_net:.2f} (Gross: ${daily_gross:.2f}, Fees: -${daily_comm:.2f}, PF: {daily_pf}, WR: {daily_wr}) | {daily_total_trades} Trades ({daily_win_count}W, {daily_loss_count}L)", expanded=False):
+            # THE FIX: Escaping the dollar signs (\$) so Streamlit doesn't render them as giant LaTeX math formulas
+            day_title = f"{day_color} {date_str} | Net: \${daily_net:.2f} | WR: {daily_wr} | Best: +\${daily_max_win:.2f} | Worst: -\${abs(daily_max_loss):.2f} | {daily_total_trades} Trades"
+            
+            with st.expander(day_title, expanded=False):
                 st.markdown("### 🎯 Daily Pre-Market & Post-Market Routine")
                 col_goal, col_reflection = st.columns(2)
                 existing_goal, existing_reflection = get_daily_note_from_db(date_str)
@@ -933,37 +939,35 @@ else:
                     
                     trade_color = "🟢" if net_pnl >= 0 else "🔴"
                     
-                    pnl_so_far_str = f"+${pnl_so_far:.2f}" if pnl_so_far > 0 else (f"-${abs(pnl_so_far):.2f}" if pnl_so_far < 0 else "$0.00")
-                    
-                    if net_pnl > 0: net_pnl_colored = f":green[+${net_pnl:.2f}]"
-                    elif net_pnl < 0: net_pnl_colored = f":red[-${abs(net_pnl):.2f}]"
-                    else: net_pnl_colored = "$0.00"
+                    # Escaping the \$ here as well for absolute safety against Math formatting
+                    if net_pnl > 0: net_pnl_colored = f":green[+\${net_pnl:.2f}]"
+                    elif net_pnl < 0: net_pnl_colored = f":red[-\${abs(net_pnl):.2f}]"
+                    else: net_pnl_colored = "\$0.00"
                         
-                    if pnl_so_far > 0: pnl_so_far_colored = f":green[+${pnl_so_far:.2f}]"
-                    elif pnl_so_far < 0: pnl_so_far_colored = f":red[-${abs(pnl_so_far):.2f}]"
-                    else: pnl_so_far_colored = "$0.00"
+                    if pnl_so_far > 0: pnl_so_far_colored = f":green[+\${pnl_so_far:.2f}]"
+                    elif pnl_so_far < 0: pnl_so_far_colored = f":red[-\${abs(pnl_so_far):.2f}]"
+                    else: pnl_so_far_colored = "\$0.00"
                     
-                    with st.expander(f"{trade_color} {trade_type.upper()} {instrument} Trade at {timestamp} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}", expanded=False):
+                    trade_title = f"{trade_color} {trade_type.upper()} {instrument} @ {timestamp} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}"
+                    with st.expander(trade_title, expanded=False):
                         col_details, col_journal = st.columns([1, 2.5])
                         
                         with col_details:
-                            st.markdown(f"**Instrument:** {instrument}")
-                            st.markdown(f"**Type:** {trade_type}")
-                            st.markdown(f"**Qty:** {qty}")
-                            st.markdown(f"**Duration:** {duration}")
+                            # Reverting to the clean st.write commands to keep layout natively spaced and perfectly aligned
+                            st.write(f"**Instrument:** {instrument}")
+                            st.write(f"**Type:** {trade_type}")
+                            st.write(f"**Qty:** {qty}")
+                            st.write(f"**Duration:** {duration}")
                             st.markdown("---")
-                            st.markdown(f"**Gross P&L:** ${gross_pnl:.2f}")
-                            st.markdown(f"**Fees:** -${comm:.2f}")
+                            st.write(f"**Gross P&L:** \${gross_pnl:.2f}")
+                            st.write(f"**Fees:** -\${comm:.2f}")
                             
-                            net_color = "#26a69a" if net_pnl >= 0 else "#ef5350"
-                            so_far_color = "#26a69a" if pnl_so_far >= 0 else "#ef5350"
-                            
-                            st.markdown(f"**Net P&L:** <span style='color:{net_color}; font-size:1.1em; font-weight:bold;'>${net_pnl:.2f}</span>", unsafe_allow_html=True)
-                            st.markdown(f"**PNL So Far:** <span style='color:{so_far_color}; font-weight:bold;'>{pnl_so_far_str}</span>", unsafe_allow_html=True)
+                            st.write(f"**Net P&L:** {net_pnl_colored}")
+                            st.write(f"**PNL So Far:** {pnl_so_far_colored}")
                             
                             st.markdown("---")
-                            st.markdown(f"**In:** {entry_price} @ {entry_time}")
-                            st.markdown(f"**Out:** {exit_price} @ {exit_time}")
+                            st.write(f"**In:** {entry_price} @ {entry_time}")
+                            st.write(f"**Out:** {exit_price} @ {exit_time}")
                             
                             mfe_val, mae_val = calculate_mae_mfe(instrument, entry_time, exit_time, entry_price, trade_type)
                             if mfe_val != "N/A": st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts\n**MAE (Max Heat):** -{mae_val:.2f} pts")
@@ -974,7 +978,6 @@ else:
                                 st.rerun()
                             st.markdown("---")
                             
-                            # --- THE FIX: Added "Counter Trend" to the drop down selector ---
                             strategy_options = ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"]
                             strat_val = row.get('strategy', 'Uncategorized')
                             if strat_val not in strategy_options: strat_val = "Uncategorized"
