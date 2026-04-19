@@ -800,6 +800,34 @@ else:
         st.warning("No trades match your current filters.")
     else:
         st.header("Historical Overview & Equity Curve")
+        
+        # --- NEW ENGINE: Streak & Drawdown Math ---
+        master_df = master_df.sort_values(by='Datetime').reset_index(drop=True)
+        
+        current_win_streak = 0
+        max_win_streak = 0
+        current_loss_streak = 0
+        max_loss_streak = 0
+        
+        for pnl in master_df['Net_PnL']:
+            if pnl > 0:
+                current_win_streak += 1
+                current_loss_streak = 0
+                if current_win_streak > max_win_streak: max_win_streak = current_win_streak
+            elif pnl < 0:
+                current_loss_streak += 1
+                current_win_streak = 0
+                if current_loss_streak > max_loss_streak: max_loss_streak = current_loss_streak
+                
+        avg_trade_pnl = master_df['Net_PnL'].mean() if len(master_df) > 0 else 0.0
+        
+        master_df['Cumulative Net P&L'] = master_df['Net_PnL'].cumsum()
+        master_df['Running_Peak'] = master_df['Cumulative Net P&L'].cummax()
+        master_df['Running_Peak'] = master_df['Running_Peak'].clip(lower=0.0) 
+        master_df['Drawdown'] = master_df['Cumulative Net P&L'] - master_df['Running_Peak']
+        max_drawdown = master_df['Drawdown'].min() if len(master_df) > 0 else 0.0
+        # ------------------------------------------
+
         total_gross = master_df['P&L'].sum()
         total_commissions = master_df['Commission'].sum()
         total_net = master_df['Net_PnL'].sum()
@@ -824,12 +852,44 @@ else:
         col6.metric("Profit Factor", all_time_pf)
         col7.metric("Gross Winning Trades", f"{winning_trades_count}")
         col8.metric("Gross Losing Trades", f"{losing_trades_count}")
+        
+        # --- NEW UI: The Psychological Stress Row ---
+        col9, col10, col11, col12 = st.columns(4)
+        col9.metric("Max Consecutive Wins", f"{max_win_streak}")
+        col10.metric("Max Consecutive Losses", f"{max_loss_streak}")
+        col11.metric("Max Drawdown", f"-${abs(max_drawdown):.2f}")
+        col12.metric("Avg Trade P&L", f"${avg_trade_pnl:.2f}" if avg_trade_pnl >= 0 else f"-${abs(avg_trade_pnl):.2f}")
+        # --------------------------------------------
 
-        st.subheader("Cumulative Net P&L")
-        master_df['Cumulative Net P&L'] = master_df['Net_PnL'].cumsum()
+        st.markdown("---")
+        col_eq_title, col_eq_tog = st.columns([3, 1])
+        with col_eq_title:
+            st.subheader("Cumulative Net P&L & Drawdown Profile")
+        with col_eq_tog:
+            st.markdown("<br>", unsafe_allow_html=True)
+            show_drawdown = st.toggle("🚨 Overlay Drawdown", value=False)
+
         fig_equity = go.Figure()
         fig_equity.add_trace(go.Scatter(x=master_df['Datetime'], y=master_df['Cumulative Net P&L'], mode='lines', fill='tozeroy', line=dict(color='#26a69a', width=3), fillcolor='rgba(38, 166, 154, 0.1)', name='Cumulative P&L'))
-        fig_equity.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(type='date', rangebreaks=[dict(bounds=["sat", "sun"])]), yaxis=dict(tickprefix="$"), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+        
+        # --- NEW UI: The Drawdown Dual-Axis Toggle ---
+        if show_drawdown:
+            fig_equity.add_trace(go.Scatter(x=master_df['Datetime'], y=master_df['Drawdown'], mode='lines', fill='tozeroy', line=dict(color='#ef5350', width=2), fillcolor='rgba(239, 83, 80, 0.2)', name='Drawdown', yaxis='y2'))
+            fig_equity.update_layout(
+                yaxis2=dict(
+                    title=dict(text="Drawdown ($)", font=dict(color='#ef5350')),
+                    tickprefix="-$",
+                    overlaying="y",
+                    side="right",
+                    showgrid=False,
+                    zeroline=False,
+                    tickcolor='#ef5350',
+                    tickfont=dict(color='#ef5350')
+                )
+            )
+        # ---------------------------------------------
+        
+        fig_equity.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(type='date', rangebreaks=[dict(bounds=["sat", "sun"])]), yaxis=dict(tickprefix="$"), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', hovermode="x unified")
         fig_equity.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
         fig_equity.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
         st.plotly_chart(fig_equity, use_container_width=True)
@@ -968,6 +1028,14 @@ else:
             if vault_df.empty:
                 st.info("No trades found matching these specific lessons.")
             else:
+                # --- NEW UI: Vault Date Filtering ---
+                vault_dates = list(vault_df['Date_str'].unique())[::-1]
+                selected_vault_dates = st.multiselect("Filter Lessons by Trading Day (leave blank to show all):", vault_dates, key="vault_date_filter")
+                
+                if selected_vault_dates:
+                    vault_df = vault_df[vault_df['Date_str'].isin(selected_vault_dates)]
+                # ------------------------------------
+                
                 st.success(f"Extracted {len(vault_df)} flashcards matching your criteria.")
                 for _, v_row in vault_df.iterrows():
                     v_color = "🟢" if v_row['Net_PnL'] >= 0 else "🔴"
@@ -985,12 +1053,27 @@ else:
                             if v_images:
                                 st.image(os.path.join(IMAGE_DIR, v_images[0]), caption="Saved Execution Chart", use_container_width=True, output_format="PNG")
                             else:
-                                st.info("No screenshot attached to this trade.")
+                                st.info("No manual screenshot attached.")
                         with col_v2:
                             st.markdown(f"**What went good/bad:**\n> {v_row['good_bad']}")
                             st.markdown(f"**How to improve:**\n> {v_row['improve']}")
                             st.markdown(f"**Action Plan:**\n> {v_row['action_plan']}")
                             st.markdown(f"**General Notes:**\n> {v_row['notes']}")
+                            
+                        # --- NEW UI: Vault TradingView Integration ---
+                        st.markdown("---")
+                        if st.checkbox("📈 Load Interactive TradingView Chart", key=f"show_chart_vault_{v_row['trade_id']}"):
+                            try:
+                                trade_dt = pd.to_datetime(v_row['Timestamp'])
+                                start_time, end_time = trade_dt - timedelta(hours=16), trade_dt + timedelta(hours=16)
+                                market_df = get_market_data(v_row['Instrument'], start_time, end_time)
+                                if not market_df.empty:
+                                    st.markdown("### 📊 TradingView Interactive Chart")
+                                    html_chart = render_tradingview_chart(market_df, v_row['Entry_Time'], v_row['Exit_Time'], v_row.get('trade_type', 'Unknown'))
+                                    components.html(html_chart, height=450)
+                                else: st.warning("No market data available for this 32-hour window.")
+                            except: pass 
+                        # ---------------------------------------------
 
         st.divider()
 
@@ -1063,6 +1146,28 @@ else:
             daily_df = daily_df.sort_values(by='Datetime', ascending=True).reset_index(drop=True)
             daily_df['PnL_So_Far'] = daily_df['Net_PnL'].cumsum().shift(1).fillna(0.0)
             
+            # --- NEW ENGINE: Intraday Streaks & Drawdown ---
+            d_win_streak, d_max_win_streak = 0, 0
+            d_loss_streak, d_max_loss_streak = 0, 0
+            
+            for pnl in daily_df['Net_PnL']:
+                if pnl > 0:
+                    d_win_streak += 1
+                    d_loss_streak = 0
+                    if d_win_streak > d_max_win_streak: d_max_win_streak = d_win_streak
+                elif pnl < 0:
+                    d_loss_streak += 1
+                    d_win_streak = 0
+                    if d_loss_streak > d_max_loss_streak: d_max_loss_streak = d_loss_streak
+                    
+            daily_avg_pnl = daily_df['Net_PnL'].mean() if len(daily_df) > 0 else 0.0
+            
+            daily_df['Daily_Cum_PnL'] = daily_df['Net_PnL'].cumsum()
+            daily_df['Daily_Peak'] = daily_df['Daily_Cum_PnL'].cummax().clip(lower=0.0)
+            daily_df['Daily_Drawdown'] = daily_df['Daily_Cum_PnL'] - daily_df['Daily_Peak']
+            daily_max_drawdown = daily_df['Daily_Drawdown'].min() if len(daily_df) > 0 else 0.0
+            # -----------------------------------------------
+            
             daily_gross = daily_df['P&L'].sum()
             daily_comm = daily_df['Commission'].sum()
             daily_net = daily_df['Net_PnL'].sum()
@@ -1095,6 +1200,17 @@ else:
                     st.success("Daily routine saved successfully.")
                 
                 st.divider()
+                
+                # --- NEW UI: Daily Tilt & Stress Metrics ---
+                st.markdown("### 🧠 Intraday Psychological Stress")
+                col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+                col_d1.metric("Intraday Max Cons. Wins", f"{d_max_win_streak}")
+                col_d2.metric("Intraday Max Cons. Losses", f"{d_max_loss_streak}")
+                col_d3.metric("Intraday Max Drawdown", f"-${abs(daily_max_drawdown):.2f}")
+                col_d4.metric("Daily Avg Trade P&L", f"${daily_avg_pnl:.2f}" if daily_avg_pnl >= 0 else f"-${abs(daily_avg_pnl):.2f}")
+                st.divider()
+                # -------------------------------------------
+                
                 st.markdown("### 📊 Trade Executions")
                 
                 display_df = daily_df.copy()
