@@ -10,7 +10,7 @@ This journal is coded for Tradovate prop accounts and I upload the daily CSV fil
 
 Here is a breakdown of the main features I’ve implemented:
 
-📊 Core Analytics & Data Processing
+📊 **Core Analytics & Data Processing**
 
 Automated Import: Drag-and-drop Tradovate CSV uploads that automatically calculate Net P&L, strict commission tracking, and trade duration.
 
@@ -20,7 +20,7 @@ Time & Instrument Heatmaps: Automatically visualizes performance by Time of Day 
 
 Strategy Tracking: Categorizes trades by setup (e.g., Breakout, Counter Trend) and tracks Expectancy, Win Rate, and Average Win/Loss strictly per strategy.
 
-⚙️ Advanced Trade Mechanics
+⚙️ **Advanced Trade Mechanics**
 
 MAE / MFE Engine: Imports raw TradingView OHLCV data (1-min or 15-sec) to automatically calculate the Max Adverse Excursion (Heat) and Max Favorable Excursion (Potential Profit) for every individual execution.
 
@@ -30,7 +30,7 @@ The Scalper’s Heatmap: A dedicated 2D scatter plot plotting MAE vs. MFE across
 
 Interactive Charts: Generates an embedded, interactive Lightweight TradingView chart directly inside the specific trade's log, plotting the exact entry and exit markers.
 
-🧠 Psychology & Discipline Engine
+🧠 **Psychology & Discipline Engine**
 
 Reminder Center & Content Vault: Allows tagging trades with specific human errors (e.g., FOMO, Over Sizing, Counter Trend Stubbornness). A dedicated vault filters the database to generate "Flashcards" of these exact trades so you can study your psychological leaks (or prep video content).
 
@@ -40,7 +40,7 @@ Weekly Goals & Master Rules: Dedicated sections for your overarching trading rul
 
 Deep Trade Journaling: Form-buffered text areas for Good/Bad analysis, Improvement plans, Execution Scoring (1-10), and manual chart screenshot uploads.
 
-🛡️ Data Safety
+🛡️ **Data Safety**
 
 Recycle Bin Architecture: Every delete button (trades, days, market data, weekly reports) uses a "Soft Delete" safety switch. Data goes to a built-in Recycle Bin where it can be fully restored or permanently incinerated.
 
