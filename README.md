@@ -52,6 +52,7 @@ Step 1: Get Python & Setup your Folder Make sure you have Python installed on yo
 Step 2: Save the Code Open a text editor (like VS Code, or even Notepad), paste the entire Python script I shared, and save it inside that folder as dashboard.py.
 
 Step 3: Install the Required Libraries Open your computer's Terminal or Command Prompt, navigate to your new folder, and install the three required external libraries by running this exact command: 
+
 "
 Bash
 
@@ -60,6 +61,7 @@ pip install streamlit pandas plotly
 (Note: SQLite and the other modules are already built into Python natively!)
 
 Step 4: Launch the Vault Once the installation finishes, run this command in your terminal to start the engine: 
+
 "
 Bash
 
