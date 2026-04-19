@@ -45,6 +45,7 @@ Deep Trade Journaling: Form-buffered text areas for Good/Bad analysis, Improveme
 Recycle Bin Architecture: Every delete button (trades, days, market data, weekly reports) uses a "Soft Delete" safety switch. Data goes to a built-in Recycle Bin where it can be fully restored or permanently incinerated.
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------
+**Instructions**
 To run it: (you can also ask any chat bot for help with this if struggling) Since this runs entirely on your own machine, none of your trading data is ever sent to the cloud. Here is how to get it running in 3 minutes:
 
 Step 1: Get Python & Setup your Folder Make sure you have Python installed on your computer. Create a new folder on your desktop called Trading_Journal (or whatever you want).
@@ -73,8 +74,7 @@ Step 5: Start Journaling A local web browser tab will instantly pop up. The firs
 
 Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file, and the dashboard will instantly populate!
 
-How to add market data:
-
+**How to add market data:**
 1) Go to tradingview and get the 1 minute chart of your instrument loaded, go backwards to load as many candles as you want.
 2) Besides the "Layout" menu click on the dropdown arrow and select "Download Chart Data"
 3) Download in "ISO Time" format
