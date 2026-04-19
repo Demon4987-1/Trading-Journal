@@ -32,13 +32,29 @@ COMMISSIONS = {
     'ZM': 2.8, 'ZW': 2.8, 'SIL': 0.8
 }
 
+LESSON_TAGS = [
+    "🧠 Psych: Revenge Trading",
+    "🧠 Psych: FOMO (Chasing)",
+    "🧠 Psych: Boredom / Overtrading",
+    "🧠 Psych: Hesitation / Paralysis",
+    "🛡️ Risk: Averaging Down",
+    "🛡️ Risk: Moving Stop Loss",
+    "🛡️ Risk: Risked Daily Max on One Trade",
+    "⚙️ Tech: Ignored Higher Timeframe",
+    "⚙️ Tech: Trading Into News",
+    "⚙️ Tech: Front-Running the Setup",
+    "🏆 Win: Textbook Execution",
+    "🏆 Win: Held Through Heat",
+    "🏆 Win: Took the Planned Stop"
+]
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     tables = [
         '''CREATE TABLE IF NOT EXISTS trades (trade_id TEXT PRIMARY KEY, instrument TEXT, timestamp TEXT, pnl REAL, duration TEXT, qty INTEGER, entry_time TEXT, exit_time TEXT, entry_price REAL, exit_price REAL, commission REAL, net_pnl REAL, trade_type TEXT, is_deleted INTEGER DEFAULT 0)''',
-        '''CREATE TABLE IF NOT EXISTS journal_entries (trade_id TEXT PRIMARY KEY, notes TEXT, score INTEGER DEFAULT 0, good_bad TEXT, improve TEXT, action_plan TEXT, strategy TEXT DEFAULT 'Uncategorized')''',
+        '''CREATE TABLE IF NOT EXISTS journal_entries (trade_id TEXT PRIMARY KEY, notes TEXT, score INTEGER DEFAULT 0, good_bad TEXT, improve TEXT, action_plan TEXT, strategy TEXT DEFAULT 'Uncategorized', lesson_tags TEXT DEFAULT '')''',
         '''CREATE TABLE IF NOT EXISTS daily_journal (date_str TEXT PRIMARY KEY, goal TEXT, reflection TEXT)''',
         '''CREATE TABLE IF NOT EXISTS trading_rules (id TEXT PRIMARY KEY, max_risk TEXT, setups TEXT, runners TEXT)''',
         '''CREATE TABLE IF NOT EXISTS weekly_goals (id TEXT PRIMARY KEY, goal TEXT, mon_status TEXT, mon_how TEXT, mon_plan TEXT, tue_status TEXT, tue_how TEXT, tue_plan TEXT, wed_status TEXT, wed_how TEXT, wed_plan TEXT, thu_status TEXT, thu_how TEXT, thu_plan TEXT, fri_status TEXT, fri_how TEXT, fri_plan TEXT, history TEXT)''',
@@ -67,6 +83,7 @@ def init_db():
         "ALTER TABLE journal_entries ADD COLUMN improve TEXT",
         "ALTER TABLE journal_entries ADD COLUMN action_plan TEXT",
         "ALTER TABLE journal_entries ADD COLUMN strategy TEXT DEFAULT 'Uncategorized'",
+        "ALTER TABLE journal_entries ADD COLUMN lesson_tags TEXT DEFAULT ''",
         "ALTER TABLE trading_rules ADD COLUMN prep_day TEXT",
         "ALTER TABLE trading_rules ADD COLUMN prep_week TEXT",
         "ALTER TABLE trading_rules ADD COLUMN max_risk_day TEXT",
@@ -85,7 +102,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- Utility Functions for Parsing Numbers and Durations ---
 def force_float(val):
     if pd.isna(val): return 0.0
     val_str = str(val)
@@ -215,7 +231,6 @@ def clean_ohlcv_data(df):
     for col in ['Open', 'High', 'Low', 'Close']: df[col] = df[col].apply(force_float)
     return df
 
-# Database Functions
 def insert_trades_to_db(df):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -261,8 +276,7 @@ def insert_market_data_to_db(df, instrument):
 
 def load_all_trades():
     conn = sqlite3.connect(DB_FILE)
-    # The Invisibility Filter: Only load trades where is_deleted = 0
-    query = '''SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy FROM trades t LEFT JOIN journal_entries j ON t.trade_id = j.trade_id WHERE t.is_deleted = 0 OR t.is_deleted IS NULL'''
+    query = '''SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy, j.lesson_tags FROM trades t LEFT JOIN journal_entries j ON t.trade_id = j.trade_id WHERE t.is_deleted = 0 OR t.is_deleted IS NULL'''
     df = pd.read_sql_query(query, conn)
     conn.close()
     
@@ -282,6 +296,7 @@ def load_all_trades():
         df['improve'] = df['improve'].fillna("")
         df['action_plan'] = df['action_plan'].fillna("")
         df['strategy'] = df['strategy'].fillna("Uncategorized")
+        df['lesson_tags'] = df.get('lesson_tags', '').fillna("")
     return df
 
 @st.cache_data
@@ -289,7 +304,6 @@ def get_market_data(instrument, start_time, end_time):
     conn = sqlite3.connect(DB_FILE)
     start_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
     end_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
-    # Ignored deleted market data
     query = '''SELECT timestamp, open, high, low, close FROM market_data WHERE instrument = ? AND timestamp >= ? AND timestamp <= ? AND (is_deleted = 0 OR is_deleted IS NULL)'''
     df = pd.read_sql_query(query, conn, params=(instrument, start_str, end_str))
     conn.close()
@@ -306,7 +320,11 @@ def calculate_mae_mfe(instrument, entry_time_str, exit_time_str, entry_price, tr
         dt_in = pd.to_datetime(entry_time_str).replace(tzinfo=None)
         dt_out = pd.to_datetime(exit_time_str).replace(tzinfo=None)
         if dt_in > dt_out: dt_in, dt_out = dt_out, dt_in
-        market_df = get_market_data(instrument, dt_in, dt_out)
+        
+        search_start = dt_in.replace(second=0, microsecond=0)
+        search_end = (dt_out + timedelta(minutes=1)).replace(second=0, microsecond=0)
+        market_df = get_market_data(instrument, search_start, search_end)
+        
         if market_df.empty: return "N/A", "N/A"
         max_high = market_df['high'].max()
         min_low = market_df['low'].min()
@@ -316,7 +334,6 @@ def calculate_mae_mfe(instrument, entry_time_str, exit_time_str, entry_price, tr
         return max(0.0, mfe), max(0.0, mae)
     except: return "N/A", "N/A"
 
-# --- THE FIX: Universal Soft Deletes ---
 def delete_trade_from_db(trade_id):
     conn = sqlite3.connect(DB_FILE)
     conn.execute("UPDATE trades SET is_deleted = 1 WHERE trade_id = ?", (trade_id,))
@@ -380,11 +397,10 @@ def empty_recycle_bin_db():
     conn.execute("DELETE FROM market_data WHERE is_deleted = 1")
     conn.commit()
     conn.close()
-# -----------------------------
 
-def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan, strategy):
+def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str):
     conn = sqlite3.connect(DB_FILE)
-    conn.execute('''REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan, strategy) VALUES (?, ?, ?, ?, ?, ?, ?)''', (trade_id, notes, score, good_bad, improve, action_plan, strategy))
+    conn.execute('''REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str))
     conn.commit()
     conn.close()
 
@@ -552,12 +568,17 @@ with col_up2:
                     st.cache_data.clear() 
                     st.success(f"Successfully processed {rows} minutes of market data for {ohlcv_instrument.upper()}!")
         st.markdown("---")
+        
+        confirm_md_clear = st.checkbox("I confirm I want to clear all market data.", key="conf_md_clear")
         if st.button("🗑️ Clear All Saved Market Data", use_container_width=True):
-            delete_all_market_data()
-            st.cache_data.clear()
-            st.success("Market data moved to recycle bin.")
-            time.sleep(1.5)
-            st.rerun()
+            if confirm_md_clear:
+                delete_all_market_data()
+                st.cache_data.clear()
+                st.success("Market data moved to recycle bin.")
+                time.sleep(1.5)
+                st.rerun()
+            else:
+                st.error("⚠️ Please check the confirmation box above to proceed.")
 
 st.divider()
 
@@ -590,16 +611,29 @@ for i in range(5):
         new_wg[f"{days[i]}_p"] = st.text_area("Plan:", value=saved_p[i], key=f"{days[i]}_p", height=100)
 
 st.markdown("<br>", unsafe_allow_html=True)
-if st.button("Save Current Weekly Goal Inputs", use_container_width=True):
-    save_weekly_goals(new_wg_goal, 
-        new_wg["mon_s"], new_wg["mon_h"], new_wg["mon_p"], new_wg["mon_g"], 
-        new_wg["tue_s"], new_wg["tue_h"], new_wg["tue_p"], new_wg["tue_g"], 
-        new_wg["wed_s"], new_wg["wed_h"], new_wg["wed_p"], new_wg["wed_g"], 
-        new_wg["thu_s"], new_wg["thu_h"], new_wg["thu_p"], new_wg["thu_g"], 
-        new_wg["fri_s"], new_wg["fri_h"], new_wg["fri_p"], new_wg["fri_g"], legacy_history)
-    st.success("Weekly tracking successfully saved to vault!")
-    time.sleep(1)
-    st.rerun()
+col_w_save, col_w_clear = st.columns([3, 2])
+with col_w_save:
+    if st.button("Save Current Weekly Goal Inputs", use_container_width=True):
+        save_weekly_goals(new_wg_goal, 
+            new_wg["mon_s"], new_wg["mon_h"], new_wg["mon_p"], new_wg["mon_g"], 
+            new_wg["tue_s"], new_wg["tue_h"], new_wg["tue_p"], new_wg["tue_g"], 
+            new_wg["wed_s"], new_wg["wed_h"], new_wg["wed_p"], new_wg["wed_g"], 
+            new_wg["thu_s"], new_wg["thu_h"], new_wg["thu_p"], new_wg["thu_g"], 
+            new_wg["fri_s"], new_wg["fri_h"], new_wg["fri_p"], new_wg["fri_g"], legacy_history)
+        st.success("Weekly tracking successfully saved to vault!")
+        time.sleep(1)
+        st.rerun()
+
+with col_w_clear:
+    confirm_w_clear = st.checkbox("Confirm wiping board", key="conf_w_clear")
+    if st.button("🧹 Clear Active Weekly Board", use_container_width=True):
+        if confirm_w_clear:
+            save_weekly_goals("", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", legacy_history)
+            st.success("Weekly board wiped clean!")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error("⚠️ Please check confirmation box.")
 
 with st.expander("🗄️ Archive Week to History Report Card", expanded=False):
     col_arch1, col_arch2 = st.columns([2, 1])
@@ -612,7 +646,7 @@ with st.expander("🗄️ Archive Week to History Report Card", expanded=False):
                 report += f"{day_names[i]} - {new_wg[f'{days[i]}_s']} - Grade: {new_wg[f'{days[i]}_g']}\nHow: {new_wg[f'{days[i]}_h']}\nPlan: {new_wg[f'{days[i]}_p']}\n\n"
             save_weekly_history(week_date_range, report)
             st.success("Archived to History successfully!")
-            time.sleep(1)
+            time.sleep(1.5)
             st.rerun()
     
     history_records = get_weekly_history()
@@ -621,9 +655,13 @@ with st.expander("🗄️ Archive Week to History Report Card", expanded=False):
         for w_range, r_text in history_records:
             with st.expander(f"📅 Week Report: {w_range}", expanded=False):
                 st.text(r_text)
+                confirm_w_del = st.checkbox("Confirm Deletion", key=f"conf_w_{w_range}")
                 if st.button(f"🗑️ Delete this Report Card", key=f"del_hist_{w_range}"):
-                    delete_weekly_history(w_range)
-                    st.rerun()
+                    if confirm_w_del:
+                        delete_weekly_history(w_range)
+                        st.rerun()
+                    else:
+                        st.error("⚠️ Please check the confirmation box.")
 
 st.divider()
 
@@ -659,16 +697,29 @@ for i in range(5):
         new_ew[f"{weeks[i]}_p"] = st.text_area("Plan:", value=saved_ew_p[i], key=f"e_{weeks[i]}_p", height=100)
 
 st.markdown("<br>", unsafe_allow_html=True)
-if st.button("Save Current Monthly Enemy Tracking", use_container_width=True):
-    save_monthly_enemy(new_enemy, new_trading, new_life, new_plan, new_progress, 
-        new_ew["w1_s"], new_ew["w1_h"], new_ew["w1_p"], new_ew["w1_g"], 
-        new_ew["w2_s"], new_ew["w2_h"], new_ew["w2_p"], new_ew["w2_g"], 
-        new_ew["w3_s"], new_ew["w3_h"], new_ew["w3_p"], new_ew["w3_g"], 
-        new_ew["w4_s"], new_ew["w4_h"], new_ew["w4_p"], new_ew["w4_g"], 
-        new_ew["w5_s"], new_ew["w5_h"], new_ew["w5_p"], new_ew["w5_g"])
-    st.success("Monthly enemy tracking successfully saved to vault!")
-    time.sleep(1)
-    st.rerun()
+col_m_save, col_m_clear = st.columns([3, 2])
+with col_m_save:
+    if st.button("Save Current Monthly Enemy Tracking", use_container_width=True):
+        save_monthly_enemy(new_enemy, new_trading, new_life, new_plan, new_progress, 
+            new_ew["w1_s"], new_ew["w1_h"], new_ew["w1_p"], new_ew["w1_g"], 
+            new_ew["w2_s"], new_ew["w2_h"], new_ew["w2_p"], new_ew["w2_g"], 
+            new_ew["w3_s"], new_ew["w3_h"], new_ew["w3_p"], new_ew["w3_g"], 
+            new_ew["w4_s"], new_ew["w4_h"], new_ew["w4_p"], new_ew["w4_g"], 
+            new_ew["w5_s"], new_ew["w5_h"], new_ew["w5_p"], new_ew["w5_g"])
+        st.success("Monthly enemy tracking successfully saved to vault!")
+        time.sleep(1)
+        st.rerun()
+
+with col_m_clear:
+    confirm_m_clear = st.checkbox("Confirm wiping board", key="conf_m_clear")
+    if st.button("🧹 Clear Active Monthly Board", use_container_width=True):
+        if confirm_m_clear:
+            save_monthly_enemy("", "", "", "", "", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-", "N/A", "", "", "-")
+            st.success("Monthly board wiped clean!")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error("⚠️ Please check confirmation box.")
 
 with st.expander("🗄️ Archive Monthly Enemy to History", expanded=False):
     col_ea1, col_ea2 = st.columns([2, 1])
@@ -681,7 +732,7 @@ with st.expander("🗄️ Archive Monthly Enemy to History", expanded=False):
                 report += f"{week_names[i]} - Defeated: {new_ew[f'{weeks[i]}_s']} - Grade: {new_ew[f'{weeks[i]}_g']}\nNotes: {new_ew[f'{weeks[i]}_h']}\nPlan: {new_ew[f'{weeks[i]}_p']}\n\n"
             save_monthly_enemy_history(enemy_month_range, report)
             st.success("Archived Enemy to History successfully!")
-            time.sleep(1)
+            time.sleep(1.5)
             st.rerun()
     
     enemy_hist = get_monthly_enemy_history()
@@ -690,9 +741,13 @@ with st.expander("🗄️ Archive Monthly Enemy to History", expanded=False):
         for m_range, m_text in enemy_hist:
             with st.expander(f"🦹 Monthly Report: {m_range}", expanded=False):
                 st.text(m_text)
+                confirm_m_del = st.checkbox("Confirm Deletion", key=f"conf_m_{m_range}")
                 if st.button(f"🗑️ Delete this Report Card", key=f"del_ehist_{m_range}"):
-                    delete_monthly_enemy_history(m_range)
-                    st.rerun()
+                    if confirm_m_del:
+                        delete_monthly_enemy_history(m_range)
+                        st.rerun()
+                    else:
+                        st.error("⚠️ Please check the confirmation box.")
 
 st.divider()
 
@@ -722,6 +777,9 @@ master_df = load_all_trades()
 if master_df.empty:
     st.info("Your vault is currently empty. Please upload a Tradovate CSV file using the menu above to begin.")
 else:
+    # --- THE FIX: Pipeline Shift - Generating the Universal Date String immediately ---
+    master_df['Date_str'] = master_df['Datetime'].dt.strftime('%A, %B %d, %Y')
+    
     st.header("Dashboard Filters")
     col_filt1, col_filt2, col_filt3 = st.columns(3)
     with col_filt1:
@@ -854,6 +912,86 @@ else:
                 fig_inst.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis=dict(tickprefix="$"))
                 st.plotly_chart(fig_inst, use_container_width=True)
 
+            st.markdown("---")
+            st.subheader("5. The Scalper's Heatmap (MAE vs. MFE)")
+            st.markdown("Visualizes the maximum heat (MAE) taken versus the maximum profit potential (MFE). Use this to mathematically optimize your stop-loss placement.")
+            
+            hm_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+            selected_hm_inst = st.multiselect("Filter Heatmap by Instrument (leave blank to chart all):", hm_instruments, key="hm_inst_filter")
+            
+            # --- THE FIX: Heatmap Date Filtering Isolation ---
+            hm_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+            selected_hm_dates = st.multiselect("Filter Heatmap by Trading Day (leave blank to chart all):", hm_dates, key="hm_date_filter")
+            
+            hm_target_df = master_df.copy()
+            if selected_hm_inst:
+                hm_target_df = hm_target_df[hm_target_df['Instrument'].isin(selected_hm_inst)]
+            if selected_hm_dates:
+                hm_target_df = hm_target_df[hm_target_df['Date_str'].isin(selected_hm_dates)]
+            # ------------------------------------------------
+            
+            heatmap_data = []
+            for _, row in hm_target_df.iterrows():
+                mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
+                if mfe != "N/A" and mae != "N/A":
+                    heatmap_data.append({'Trade': f"{row['Instrument']} ({row['Timestamp']})", 'MFE': float(mfe), 'MAE': float(mae), 'Net_PnL': row['Net_PnL']})
+            
+            if heatmap_data:
+                hm_df = pd.DataFrame(heatmap_data)
+                fig_hm = go.Figure()
+                
+                wins = hm_df[hm_df['Net_PnL'] > 0]
+                fig_hm.add_trace(go.Scatter(x=wins['MAE'], y=wins['MFE'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')), text=wins['Trade']))
+                
+                losses = hm_df[hm_df['Net_PnL'] <= 0]
+                fig_hm.add_trace(go.Scatter(x=losses['MAE'], y=losses['MFE'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')), text=losses['Trade']))
+                
+                fig_hm.update_layout(height=500, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Max Adverse Excursion (MAE) - Heat Taken', autorange="reversed", gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Max Favorable Excursion (MFE) - Potential Profit', gridcolor='rgba(128, 128, 128, 0.2)'))
+                st.plotly_chart(fig_hm, use_container_width=True)
+            else:
+                st.info("Upload Market Data to generate the Scalper's Heatmap.")
+
+        st.divider()
+        st.header("🧠 Reminder Center & Content Vault")
+        st.markdown("Filter your historical trades by the psychological and technical lessons they taught you. Use this to instantly generate YouTube script materials or prep for your trading day.")
+        
+        vault_tags = st.multiselect("Select Lessons to Extract:", LESSON_TAGS)
+        
+        if vault_tags:
+            def has_tag(tag_string, tags_to_find):
+                if pd.isna(tag_string) or not tag_string: return False
+                row_tags = [t.strip() for t in str(tag_string).split(',')]
+                return any(t in row_tags for t in tags_to_find)
+                
+            vault_df = master_df[master_df['lesson_tags'].apply(lambda x: has_tag(x, vault_tags))]
+            
+            if vault_df.empty:
+                st.info("No trades found matching these specific lessons.")
+            else:
+                st.success(f"Extracted {len(vault_df)} flashcards matching your criteria.")
+                for _, v_row in vault_df.iterrows():
+                    v_color = "🟢" if v_row['Net_PnL'] >= 0 else "🔴"
+                    v_pnl_str = f"+${v_row['Net_PnL']:.2f}" if v_row['Net_PnL'] > 0 else f"-${abs(v_row['Net_PnL']):.2f}"
+                    v_tags_rendered = " | ".join([f"`{t.strip()}`" for t in str(v_row['lesson_tags']).split(',') if t.strip()])
+                    
+                    with st.expander(f"{v_color} {v_row['Date_str']} | {v_row['Instrument']} | {v_pnl_str} | Strategy: {v_row['strategy']}", expanded=False):
+                        st.markdown(f"**Tagged Lessons:** {v_tags_rendered}")
+                        st.markdown("---")
+                        
+                        col_v1, col_v2 = st.columns([1, 2])
+                        with col_v1:
+                            v_safe_id = str(v_row['trade_id']).replace("/", "-").replace("\\", "-")
+                            v_images = [f for f in os.listdir(IMAGE_DIR) if f.startswith(v_safe_id)]
+                            if v_images:
+                                st.image(os.path.join(IMAGE_DIR, v_images[0]), caption="Saved Execution Chart", use_container_width=True, output_format="PNG")
+                            else:
+                                st.info("No screenshot attached to this trade.")
+                        with col_v2:
+                            st.markdown(f"**What went good/bad:**\n> {v_row['good_bad']}")
+                            st.markdown(f"**How to improve:**\n> {v_row['improve']}")
+                            st.markdown(f"**Action Plan:**\n> {v_row['action_plan']}")
+                            st.markdown(f"**General Notes:**\n> {v_row['notes']}")
+
         st.divider()
 
         st.header("📅 Trading Calendar")
@@ -898,7 +1036,6 @@ else:
         st.divider()
 
         st.header("Daily Reviews & Trade Log")
-        master_df['Date_str'] = master_df['Datetime'].dt.strftime('%A, %B %d, %Y')
         all_unique_dates = list(master_df['Date_str'].unique())
         
         col_view1, col_view2, col_view3, col_view4 = st.columns(4)
@@ -994,24 +1131,28 @@ else:
                             col_details, col_journal = st.columns([1, 2.5])
                             
                             with col_details:
-                                st.write(f"**Instrument:** {instrument}")
-                                st.write(f"**Type:** {trade_type}")
-                                st.write(f"**Qty:** {qty}")
-                                st.write(f"**Duration:** {duration}")
-                                st.markdown("---")
-                                st.write(f"**Gross P&L:** \${gross_pnl:.2f}")
-                                st.write(f"**Fees:** -\${comm:.2f}")
-                                
-                                st.write(f"**Net P&L:** {net_pnl_colored}")
-                                st.write(f"**PNL So Far:** {pnl_so_far_colored}")
-                                
-                                st.markdown("---")
-                                st.write(f"**In:** {entry_price} @ {entry_time}")
-                                st.write(f"**Out:** {exit_price} @ {exit_time}")
+                                st.write(f"**Instrument:** {instrument}  \n"
+                                         f"**Type:** {trade_type}  \n"
+                                         f"**Qty:** {qty}  \n"
+                                         f"**Duration:** {duration}  \n"
+                                         f"  \n"
+                                         f"---  \n"
+                                         f"**Gross P&L:** \${gross_pnl:.2f}  \n"
+                                         f"**Fees:** -\${comm:.2f}  \n"
+                                         f"**Net P&L:** {net_pnl_colored}  \n"
+                                         f"**PNL So Far:** {pnl_so_far_colored}  \n"
+                                         f"  \n"
+                                         f"---  \n"
+                                         f"**In:** {entry_price} @ {entry_time}  \n"
+                                         f"**Out:** {exit_price} @ {exit_time}")
                                 
                                 mfe_val, mae_val = calculate_mae_mfe(instrument, entry_time, exit_time, entry_price, trade_type)
                                 if mfe_val != "N/A": st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts\n**MAE (Max Heat):** -{mae_val:.2f} pts")
                                 else: st.write("**MFE / MAE:** No market data for window")
+                                st.markdown("---")
+                                
+                                confirm_del_trade = st.checkbox("Confirm Deletion", key=f"conf_trade_{trade_id}")
+                                del_btn = st.form_submit_button("🗑️ Delete Trade")
                                 st.markdown("---")
                                 
                                 strategy_options = ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"]
@@ -1019,8 +1160,11 @@ else:
                                 if strat_val not in strategy_options: strat_val = "Uncategorized"
                                 strategy_choice = st.selectbox("Strategy Category", strategy_options, index=strategy_options.index(strat_val), key=f"strat_{trade_id}")
                                 score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, int(row['score']), key=f"score_{trade_id}")
-                                st.markdown("---")
                                 
+                                existing_tags = [t.strip() for t in str(row.get('lesson_tags', '')).split(',') if t.strip() in LESSON_TAGS]
+                                selected_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, default=existing_tags, key=f"tags_{trade_id}")
+                                
+                                st.markdown("---")
                                 safe_trade_id = str(trade_id).replace("/", "-").replace("\\", "-")
                                 screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}")
                                 
@@ -1030,9 +1174,6 @@ else:
                                     st.image(img_path, caption="Saved Execution Chart", use_container_width=True, output_format="PNG")
                                     st.markdown(f"**📁 File:**\n`{os.path.abspath(img_path)}`")
                                     
-                                st.markdown("---")
-                                del_btn = st.form_submit_button("🗑️ Delete Trade")
-                                
                             with col_journal:
                                 good_bad = st.text_area("1. What went good and what went bad on that trade?", value=row['good_bad'], key=f"gb_{trade_id}", height=80)
                                 improve = st.text_area("2. What can I improve on that trade?", value=row['improve'], key=f"imp_{trade_id}", height=80)
@@ -1043,8 +1184,11 @@ else:
                                 save_btn = st.form_submit_button("Save Trade Review", use_container_width=True)
                                 
                         if del_btn:
-                            delete_trade_from_db(trade_id)
-                            st.rerun()
+                            if confirm_del_trade:
+                                delete_trade_from_db(trade_id)
+                                st.rerun()
+                            else:
+                                st.error("⚠️ Please check the 'Confirm Deletion' box before clicking Delete.")
                             
                         if save_btn:
                             if screenshot is not None:
@@ -1054,7 +1198,8 @@ else:
                                 file_path = os.path.join(IMAGE_DIR, f"{safe_trade_id}_{screenshot.name}")
                                 with open(file_path, "wb") as f: f.write(screenshot.getbuffer())
                                 
-                            save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice)
+                            tags_string = ",".join(selected_tags)
+                            save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice, tags_string)
                             st.success("Trade review secured in vault!")
                             time.sleep(1)
                             st.rerun()
@@ -1074,9 +1219,13 @@ else:
                 
                 st.divider()
                 st.markdown("### ⚠️ Data Management")
+                confirm_day_del = st.checkbox(f"Confirm deleting all {len(daily_df)} trades on {date_str}", key=f"conf_day_{date_str}")
                 if st.button(f"🗑️ Delete All Trades on {date_str}", key=f"del_day_{date_str}"):
-                    delete_day_from_db(daily_df['trade_id'].tolist())
-                    st.rerun()
+                    if confirm_day_del:
+                        delete_day_from_db(daily_df['trade_id'].tolist())
+                        st.rerun()
+                    else:
+                        st.error("⚠️ Please check the confirmation box.")
 
 # --- ♻️ The Universal Recycle Bin ---
 st.divider()
@@ -1156,8 +1305,63 @@ with st.expander("♻️ Recycle Bin (Restore Deleted Data)", expanded=False):
 
     st.markdown("---")
     st.markdown("### Nuclear Option")
+    confirm_nuke_bin = st.checkbox("I understand this permanently deletes these items forever.", key="conf_nuke_bin")
     if st.button("🔥 EMPTY ENTIRE RECYCLE BIN", type="primary"):
-        empty_recycle_bin_db()
-        st.error("Recycle bin permanently incinerated. All items deleted forever.")
-        time.sleep(1.5)
-        st.rerun()
+        if confirm_nuke_bin:
+            empty_recycle_bin_db()
+            st.error("Recycle bin permanently incinerated. All items deleted forever.")
+            time.sleep(1.5)
+            st.rerun()
+        else:
+            st.error("⚠️ Please check the confirmation box.")
+
+# --- The Vault Surgeon ---
+st.divider()
+with st.expander("🛠️ Vault Surgeon (Emergency Data Extraction)", expanded=False):
+    st.markdown("Use this tool to physically delete corrupted trades directly from the SQL database.")
+    try:
+        conn_surg = sqlite3.connect(DB_FILE)
+        raw_db_df = pd.read_sql_query("SELECT trade_id, instrument, timestamp, pnl FROM trades", conn_surg)
+        conn_surg.close()
+        
+        if raw_db_df.empty:
+            st.info("The database is currently completely empty.")
+        else:
+            raw_db_df['sort_time'] = raw_db_df['timestamp'].apply(pd.to_datetime, errors='coerce')
+            raw_db_df = raw_db_df.sort_values(by='sort_time', ascending=False).drop(columns=['sort_time']).head(100)
+            
+            st.markdown("### Raw Database Contents (Top 100 Newest Trades)")
+            st.dataframe(raw_db_df)
+            
+            st.markdown("### Manual Extraction")
+            id_to_delete = st.selectbox("Select exact trade_id to physically delete from the vault:", raw_db_df['trade_id'].tolist())
+            
+            confirm_surg_del = st.checkbox("Confirm physical database deletion", key="conf_surg_del")
+            if st.button("🗑️ ERADICATE SELECTED TRADE", type="primary"):
+                if confirm_surg_del:
+                    conn_surg_del = sqlite3.connect(DB_FILE)
+                    conn_surg_del.execute("DELETE FROM trades WHERE trade_id = ?", (id_to_delete,))
+                    conn_surg_del.commit()
+                    conn_surg_del.close()
+                    st.success(f"Trade {id_to_delete} has been permanently destroyed.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("⚠️ Please check the confirmation box.")
+                
+            st.markdown("---")
+            st.markdown("### Nuclear Option")
+            confirm_nuke_db = st.checkbox("I understand this will wipe the entire trades database.", key="conf_nuke_db")
+            if st.button("🚨 DELETE ENTIRE DATABASE", type="primary"):
+                if confirm_nuke_db:
+                    conn_nuke = sqlite3.connect(DB_FILE)
+                    conn_nuke.execute("DELETE FROM trades")
+                    conn_nuke.commit()
+                    conn_nuke.close()
+                    st.error("Database wiped.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("⚠️ Please check the confirmation box.")
+    except Exception as e:
+        st.error(f"Cannot connect to database: {e}")
