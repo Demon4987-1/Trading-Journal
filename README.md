@@ -72,3 +72,11 @@ streamlit run dashboard.py
 Step 5: Start Journaling A local web browser tab will instantly pop up. The first time you run it, the Python script will automatically build your encrypted SQLite database (trading_journal.db) and the image folder right next to your code.
 
 Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file, and the dashboard will instantly populate!
+
+How to add market data:
+
+1) Go to tradingview and get the 1 minute chart of your instrument loaded, go backwards to load as many candles as you want.
+2) Besides the "Layout" menu click on the dropdown arrow and select "Download Chart Data"
+3) Download in "ISO Time" format
+4) In the tab of market data in the journal, upload the file and write the exact name of the ticker (i.e MNQM6) that the data corresponds to and click on save
+5) The Tradingview intergration should be working in the bottom section of the individual trade reviews.
