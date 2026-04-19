@@ -46,6 +46,7 @@ Recycle Bin Architecture: Every delete button (trades, days, market data, weekly
 
 ----------------------------------------------------------------------------------------------------------------------------------------------------
 **Instructions**
+
 To run it: (you can also ask any chat bot for help with this if struggling) Since this runs entirely on your own machine, none of your trading data is ever sent to the cloud. Here is how to get it running in 3 minutes:
 
 Step 1: Get Python & Setup your Folder Make sure you have Python installed on your computer. Create a new folder on your desktop called Trading_Journal (or whatever you want).
