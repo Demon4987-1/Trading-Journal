@@ -58,6 +58,7 @@ Bash
 
 pip install streamlit pandas plotly
 "
+
 (Note: SQLite and the other modules are already built into Python natively!)
 
 Step 4: Launch the Vault Once the installation finishes, run this command in your terminal to start the engine: 
@@ -67,6 +68,7 @@ Bash
 
 streamlit run dashboard.py
 "
+
 Step 5: Start Journaling A local web browser tab will instantly pop up. The first time you run it, the Python script will automatically build your encrypted SQLite database (trading_journal.db) and the image folder right next to your code.
 
 Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file, and the dashboard will instantly populate!
