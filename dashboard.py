@@ -10,6 +10,7 @@ import time
 import re
 import json
 import plotly.graph_objects as go
+import itertools
 
 # --- The Cache-Busting Trigger ---
 if 'reset_trigger' not in st.session_state:
@@ -302,6 +303,7 @@ def insert_market_data_to_db(df, instrument):
     conn.close()
     return inserted_count
 
+@st.cache_data
 def load_all_trades():
     conn = sqlite3.connect(DB_FILE)
     query = '''SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy, j.lesson_tags, j.confluence_tags FROM trades t LEFT JOIN journal_entries j ON t.trade_id = j.trade_id WHERE t.is_deleted = 0 OR t.is_deleted IS NULL'''
@@ -432,6 +434,7 @@ def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan
     conn.execute('''REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags, confluence_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str, conf_tags_str))
     conn.commit()
     conn.close()
+    st.cache_data.clear()
 
 def save_daily_note_to_db(date_str, goal, reflection):
     conn = sqlite3.connect(DB_FILE)
@@ -1020,10 +1023,24 @@ else:
                 hm_target_df = hm_target_df[hm_target_df['Date_str'].isin(selected_hm_dates)]
             
             heatmap_data = []
+            efficiency_scores = []
+            
             for _, row in hm_target_df.iterrows():
                 mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
                 if mfe != "N/A" and mae != "N/A":
                     heatmap_data.append({'Trade': f"{row['Instrument']} ({row['Timestamp']})", 'MFE': float(mfe), 'MAE': float(mae), 'Net_PnL': row['Net_PnL']})
+                    
+                    t_type = row.get('trade_type', 'Unknown').upper()
+                    captured_pts = (row['Exit_Price'] - row['Entry_Price']) if t_type == 'LONG' else (row['Entry_Price'] - row['Exit_Price'])
+                    
+                    if float(mfe) > 0 and captured_pts > 0:
+                        efficiency_scores.append(min((captured_pts / float(mfe)) * 100, 100.0))
+                    elif float(mfe) > 0:
+                        efficiency_scores.append(0.0)
+            
+            if efficiency_scores:
+                avg_efficiency = sum(efficiency_scores) / len(efficiency_scores)
+                st.metric("🎯 Average MFE Capture Rate (Filtered Data)", f"{avg_efficiency:.1f}%")
             
             if heatmap_data:
                 hm_df = pd.DataFrame(heatmap_data)
@@ -1072,64 +1089,155 @@ else:
                 st.plotly_chart(fig_dur, use_container_width=True)
             else:
                 st.info("No duration data available to plot.")
-                
-            # --- NEW UI: Monte Carlo Equity Simulator ---
+
             st.markdown("---")
-            st.subheader("7. Monte Carlo Equity Simulator (Risk of Ruin)")
-            st.markdown("This engine runs thousands of parallel universe simulations of your next series of trades by randomly sampling your actual historical execution data. It mathematically exposes your expected variance and true risk of ruin.")
+            st.subheader("7. Tilt Velocity Radar (Time-Between-Trades)")
+            st.markdown("Measures the exact time gap between a losing trade's exit and your very next entry. A low win rate on the left side of this chart mathematically proves Revenge Trading.")
+            
+            tilt_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+            selected_tilt_inst = st.multiselect("Filter Tilt Radar by Instrument (leave blank to chart all):", tilt_instruments, key="tilt_inst_filter")
+            
+            tilt_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+            selected_tilt_dates = st.multiselect("Filter Tilt Radar by Trading Day (leave blank to chart all):", tilt_dates, key="tilt_date_filter")
 
-            mc_df = master_df.dropna(subset=['Net_PnL'])
-            if len(mc_df) >= 10:
-                col_mc1, col_mc2 = st.columns([1, 2.5])
-                with col_mc1:
-                    st.markdown("**Simulation Parameters**")
-                    sim_trades = st.slider("Trades to Simulate (Future Horizon)", min_value=10, max_value=500, value=100, step=10)
-                    sim_count = st.slider("Parallel Universes (Simulations)", min_value=100, max_value=2000, value=1000, step=100)
-                    risk_threshold = st.number_input("Drawdown Danger Zone ($)", min_value=10.0, value=500.0, step=50.0)
-                    
-                    historical_pnls = mc_df['Net_PnL'].values
-                    
-                    # Core Bootstrap Engine powered by Numpy
-                    sim_data = np.random.choice(historical_pnls, size=(sim_count, sim_trades), replace=True)
-                    sim_paths = np.cumsum(sim_data, axis=1)
-                    
-                    peaks = np.maximum.accumulate(sim_paths, axis=1)
-                    drawdowns = peaks - sim_paths
-                    max_dds = np.max(drawdowns, axis=1)
-                    
-                    ruin_probability = (np.sum(max_dds >= risk_threshold) / sim_count) * 100
-                    median_ending_pnl = np.median(sim_paths[:, -1])
-                    worst_ending_pnl = np.min(sim_paths[:, -1])
-                    best_ending_pnl = np.max(sim_paths[:, -1])
-                    
-                    st.markdown("---")
-                    if ruin_probability > 20: ruin_color = "🔴"
-                    elif ruin_probability > 5: ruin_color = "🟡"
-                    else: ruin_color = "🟢"
-                    
-                    st.metric(f"Risk of -${risk_threshold:.2f} Drawdown", f"{ruin_color} {ruin_probability:.1f}%")
-                    st.metric("Median Expected P&L", f"${median_ending_pnl:.2f}")
-                    st.metric("Worst Case Scenario", f"${worst_ending_pnl:.2f}")
-
-                with col_mc2:
-                    fig_mc = go.Figure()
-                    
-                    # Plot only the first 150 paths so we don't freeze the browser
-                    plot_count = min(sim_count, 150)
-                    for i in range(plot_count):
-                        fig_mc.add_trace(go.Scatter(y=sim_paths[i], mode='lines', line=dict(width=1, color='rgba(38, 166, 154, 0.05)'), showlegend=False, hoverinfo='skip'))
-                    
-                    # Overlay the mathematical Median Expected Path
-                    median_path = np.median(sim_paths, axis=0)
-                    fig_mc.add_trace(go.Scatter(y=median_path, mode='lines', line=dict(width=3, color='#2196F3'), name='Median Expected Path'))
-                    
-                    fig_mc.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', 
-                                         xaxis=dict(title='Future Trade Number', gridcolor='rgba(128, 128, 128, 0.2)'), 
-                                         yaxis=dict(title='Simulated Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
-                    st.plotly_chart(fig_mc, use_container_width=True)
+            tilt_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
+            tilt_df['Exit_Datetime'] = pd.to_datetime(tilt_df['Exit_Time'], errors='coerce')
+            
+            tilt_df['Prev_Net_PnL'] = tilt_df['Net_PnL'].shift(1)
+            tilt_df['Prev_Exit'] = tilt_df['Exit_Datetime'].shift(1)
+            
+            tilt_df['Tilt_Gap_Mins'] = (tilt_df['Datetime'] - tilt_df['Prev_Exit']).dt.total_seconds() / 60.0
+            
+            tilt_target = tilt_df[(tilt_df['Prev_Net_PnL'] < 0) & (tilt_df['Tilt_Gap_Mins'] > 0) & (tilt_df['Tilt_Gap_Mins'] <= 60)].copy()
+            
+            if selected_tilt_inst:
+                tilt_target = tilt_target[tilt_target['Instrument'].isin(selected_tilt_inst)]
+            if selected_tilt_dates:
+                tilt_target = tilt_target[tilt_target['Date_str'].isin(selected_tilt_dates)]
+            
+            if not tilt_target.empty:
+                fig_tilt = go.Figure()
+                
+                tilt_wins = tilt_target[tilt_target['Net_PnL'] > 0]
+                fig_tilt.add_trace(go.Scatter(x=tilt_wins['Tilt_Gap_Mins'], y=tilt_wins['Net_PnL'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=tilt_wins['Instrument']))
+                
+                tilt_losses = tilt_target[tilt_target['Net_PnL'] <= 0]
+                fig_tilt.add_trace(go.Scatter(x=tilt_losses['Tilt_Gap_Mins'], y=tilt_losses['Net_PnL'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=tilt_losses['Instrument']))
+                
+                fast_tilt = tilt_target[tilt_target['Tilt_Gap_Mins'] <= 5]
+                fast_wr = (len(fast_tilt[fast_tilt['Net_PnL'] > 0]) / len(fast_tilt) * 100) if len(fast_tilt) > 0 else 0
+                
+                st.markdown(f"**Quick Stat:** Your Win Rate when re-entering within 5 minutes of a loss is **{fast_wr:.1f}%** ({len(fast_tilt)} trades).")
+                
+                fig_tilt.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Minutes Since Last Losing Trade', gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
+                st.plotly_chart(fig_tilt, use_container_width=True)
             else:
-                st.info("Log at least 10 valid trades to unlock the Monte Carlo Simulator.")
-            # ---------------------------------------------
+                st.info("Not enough sequential data to calculate Tilt Velocity. Keep logging trades!")
+                
+            st.markdown("---")
+            st.subheader("8. Monte Carlo Equity Simulator (Risk of Ruin)")
+            st.markdown("This engine runs thousands of parallel universe simulations of your next series of trades by randomly sampling your actual historical execution data.")
+            
+            if st.toggle("🧪 Run Monte Carlo Simulator", key="run_mc"):
+                mc_df = master_df.dropna(subset=['Net_PnL'])
+                if len(mc_df) >= 10:
+                    col_mc1, col_mc2 = st.columns([1, 2.5])
+                    with col_mc1:
+                        st.markdown("**Simulation Parameters**")
+                        sim_trades = st.slider("Trades to Simulate (Future Horizon)", min_value=10, max_value=500, value=100, step=10)
+                        sim_count = st.slider("Parallel Universes (Simulations)", min_value=100, max_value=2000, value=1000, step=100)
+                        risk_threshold = st.number_input("Drawdown Danger Zone ($)", min_value=10.0, value=500.0, step=50.0)
+                        
+                        historical_pnls = mc_df['Net_PnL'].values
+                        sim_data = np.random.choice(historical_pnls, size=(sim_count, sim_trades), replace=True)
+                        sim_paths = np.cumsum(sim_data, axis=1)
+                        
+                        peaks = np.maximum.accumulate(sim_paths, axis=1)
+                        drawdowns = peaks - sim_paths
+                        max_dds = np.max(drawdowns, axis=1)
+                        
+                        ruin_probability = (np.sum(max_dds >= risk_threshold) / sim_count) * 100
+                        median_ending_pnl = np.median(sim_paths[:, -1])
+                        worst_ending_pnl = np.min(sim_paths[:, -1])
+                        
+                        st.markdown("---")
+                        ruin_color = "🔴" if ruin_probability > 20 else "🟡" if ruin_probability > 5 else "🟢"
+                        
+                        st.metric(f"Risk of -${risk_threshold:.2f} Drawdown", f"{ruin_color} {ruin_probability:.1f}%")
+                        st.metric("Median Expected P&L", f"${median_ending_pnl:.2f}")
+                        st.metric("Worst Case Scenario", f"${worst_ending_pnl:.2f}")
+
+                    with col_mc2:
+                        fig_mc = go.Figure()
+                        plot_count = min(sim_count, 150)
+                        for i in range(plot_count):
+                            fig_mc.add_trace(go.Scatter(y=sim_paths[i], mode='lines', line=dict(width=1, color='rgba(38, 166, 154, 0.05)'), showlegend=False, hoverinfo='skip'))
+                        
+                        median_path = np.median(sim_paths, axis=0)
+                        fig_mc.add_trace(go.Scatter(y=median_path, mode='lines', line=dict(width=3, color='#2196F3'), name='Median Expected Path'))
+                        
+                        fig_mc.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Future Trade Number'), yaxis=dict(title='Simulated Net P&L ($)', tickprefix="$"))
+                        st.plotly_chart(fig_mc, use_container_width=True)
+                else:
+                    st.info("Log at least 10 valid trades to unlock the Monte Carlo Simulator.")
+                
+            # --- NEW UI: Automated Edge Combinator ---
+            st.markdown("---")
+            st.subheader("9. Automated Edge Combinator (A+ Setup Finder)")
+            st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
+            
+            if st.toggle("👑 Run Edge Combinator", key="run_edge"):
+                pair_stats = {}
+                for _, row in master_df.iterrows():
+                    if pd.isna(row['confluence_tags']) or not str(row['confluence_tags']).strip():
+                        continue
+                    tags = [t.strip() for t in str(row['confluence_tags']).split(',') if t.strip()]
+                    if len(tags) >= 2:
+                        pairs = list(itertools.combinations(sorted(tags), 2))
+                        for pair in pairs:
+                            if pair not in pair_stats:
+                                pair_stats[pair] = {'count': 0, 'wins': 0, 'gross_win': 0.0, 'gross_loss': 0.0}
+                            
+                            pair_stats[pair]['count'] += 1
+                            if row['Net_PnL'] > 0:
+                                pair_stats[pair]['wins'] += 1
+                                pair_stats[pair]['gross_win'] += row['Net_PnL']
+                            elif row['Net_PnL'] <= 0:
+                                pair_stats[pair]['gross_loss'] += abs(row['Net_PnL'])
+                                
+                results = []
+                min_trades_required = st.slider("Minimum Trades Required for Statistical Significance", 1, 50, 3, key="edge_min_trades")
+                
+                for pair, stats in pair_stats.items():
+                    count = stats['count']
+                    if count >= min_trades_required:
+                        wr = stats['wins'] / count
+                        lr = 1.0 - wr
+                        avg_win = stats['gross_win'] / stats['wins'] if stats['wins'] > 0 else 0.0
+                        avg_loss = stats['gross_loss'] / (count - stats['wins']) if (count - stats['wins']) > 0 else 0.0
+                        ev = (wr * avg_win) - (lr * avg_loss)
+                        
+                        results.append({
+                            'Confluence Synergy': f"{pair[0]} + {pair[1]}",
+                            'Trades': count,
+                            'Win Rate': f"{(wr * 100):.1f}%",
+                            'Avg Win': f"${avg_win:.2f}",
+                            'Avg Loss': f"-${avg_loss:.2f}",
+                            'Expected Value (EV)': ev
+                        })
+                        
+                if results:
+                    edge_df = pd.DataFrame(results)
+                    edge_df = edge_df.sort_values(by='Expected Value (EV)', ascending=False).reset_index(drop=True)
+                    edge_df['Expected Value (EV)'] = edge_df['Expected Value (EV)'].apply(lambda x: f"${x:.2f}" if x >= 0 else f"-${abs(x):.2f}")
+                    
+                    def color_ev(val):
+                        color = '#26a69a' if not '-' in str(val) and str(val) != '$0.00' else '#ef5350' if '-' in str(val) else 'gray'
+                        return f'color: {color}; font-weight: bold;'
+                    
+                    st.dataframe(edge_df.style.map(color_ev, subset=['Expected Value (EV)']), use_container_width=True)
+                else:
+                    st.info(f"No confluence pairs found with at least {min_trades_required} trades. Tag more trades to unlock the Combinator!")
 
         st.divider()
         st.header("🧠 Reminder Center & Content Vault")
@@ -1418,6 +1526,47 @@ else:
                                     st.rerun()
                 st.divider()
                 
+                # --- NEW UI: True Pagination for High-Volume Days ---
+                total_display_trades = len(display_df)
+                max_render = 30
+                
+                if total_display_trades > max_render:
+                    # Create a unique memory key for this specific day's page number
+                    page_key = f"page_{date_str}"
+                    if page_key not in st.session_state:
+                        st.session_state[page_key] = 0
+                        
+                    current_page = st.session_state[page_key]
+                    # Calculate total pages using ceiling division logic
+                    total_pages = (total_display_trades + max_render - 1) // max_render
+                    
+                    # Failsafe: If filters change and the current page no longer exists, reset it
+                    if current_page >= total_pages:
+                        current_page = max(0, total_pages - 1)
+                        st.session_state[page_key] = current_page
+                    
+                    start_idx = current_page * max_render
+                    end_idx = min(start_idx + max_render, total_display_trades)
+                    
+                    st.info(f"📑 Showing trades {start_idx + 1} to {end_idx} out of {total_display_trades}.")
+                    
+                    col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
+                    with col_p1:
+                        if st.button("⬅️ Previous Page", key=f"prev_{date_str}", use_container_width=True, disabled=(current_page == 0)):
+                            st.session_state[page_key] -= 1
+                            st.rerun()
+                    with col_p2:
+                        st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>Page {current_page + 1} of {total_pages}</b></div>", unsafe_allow_html=True)
+                    with col_p3:
+                        if st.button("Next Page ➡️", key=f"next_{date_str}", use_container_width=True, disabled=(current_page == total_pages - 1)):
+                            st.session_state[page_key] += 1
+                            st.rerun()
+                            
+                    # Slice the dataframe to only render this specific page
+                    display_df = display_df.iloc[start_idx:end_idx]
+                    st.markdown("<br>", unsafe_allow_html=True)
+                # ----------------------------------------------------
+                
                 for index, row in display_df.iterrows():
                     trade_id, instrument, timestamp = row['trade_id'], row['Instrument'], row['Timestamp']
                     gross_pnl, comm, net_pnl = row['P&L'], row['Commission'], row['Net_PnL']
@@ -1438,7 +1587,8 @@ else:
                     elif pnl_so_far < 0: pnl_so_far_colored = f":red[-\${abs(pnl_so_far):.2f}]"
                     else: pnl_so_far_colored = "\$0.00"
                     
-                    trade_title = f"{trade_color} {trade_type.upper()} {instrument} @ {timestamp} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}"
+                    # --- ADDED QTY TO THE DROPDOWN TITLE ---
+                    trade_title = f"{trade_color} {trade_type.upper()} {instrument} @ {timestamp} | Qty: {qty} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}"
                     with st.expander(trade_title, expanded=False):
                         with st.form(key=f"review_form_{trade_id}_{rt}"):
                             col_details, col_journal = st.columns([1, 2.5])
@@ -1460,7 +1610,19 @@ else:
                                          f"**Out:** {exit_price} @ {exit_time}")
                                 
                                 mfe_val, mae_val = calculate_mae_mfe(instrument, entry_time, exit_time, entry_price, trade_type)
-                                if mfe_val != "N/A": st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts\n**MAE (Max Heat):** -{mae_val:.2f} pts")
+                                if mfe_val != "N/A": 
+                                    st.write(f"**MFE (Max Profit):** +{mfe_val:.2f} pts\n**MAE (Max Heat):** -{mae_val:.2f} pts")
+                                    
+                                    captured_pts = (exit_price - entry_price) if trade_type.upper() == 'LONG' else (entry_price - exit_price)
+                                    if mfe_val > 0 and captured_pts > 0:
+                                        eff_score = min((captured_pts / mfe_val) * 100, 100.0)
+                                        if eff_score >= 80: eff_badge = "🟢 Sniper"
+                                        elif eff_score >= 50: eff_badge = "🟡 Good"
+                                        else: eff_badge = "🔴 Left Money on Table"
+                                        st.write(f"**Exit Efficiency:** {eff_score:.1f}% ({eff_badge})")
+                                    elif mfe_val > 0:
+                                        st.write(f"**Exit Efficiency:** 0.0% (🔴 Stopped Out)")
+                                        
                                 else: st.write("**MFE / MAE:** No market data for window")
                                 st.markdown("---")
                                 
