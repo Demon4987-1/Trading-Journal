@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import numpy as np
 import os
 import sqlite3
 import calendar
@@ -1039,7 +1040,6 @@ else:
             else:
                 st.info("Upload Market Data to generate the Scalper's Heatmap.")
 
-            # --- NEW UI: The Hope Metric Scatter Plot ---
             st.markdown("---")
             st.subheader("6. Trade Duration vs. Profitability (The 'Hope' Metric)")
             st.markdown("Visualizes how long you hold trades versus how much they pay. If your losing trades cluster to the right of your winning trades, it proves you are holding and hoping instead of cutting losses.")
@@ -1072,6 +1072,64 @@ else:
                 st.plotly_chart(fig_dur, use_container_width=True)
             else:
                 st.info("No duration data available to plot.")
+                
+            # --- NEW UI: Monte Carlo Equity Simulator ---
+            st.markdown("---")
+            st.subheader("7. Monte Carlo Equity Simulator (Risk of Ruin)")
+            st.markdown("This engine runs thousands of parallel universe simulations of your next series of trades by randomly sampling your actual historical execution data. It mathematically exposes your expected variance and true risk of ruin.")
+
+            mc_df = master_df.dropna(subset=['Net_PnL'])
+            if len(mc_df) >= 10:
+                col_mc1, col_mc2 = st.columns([1, 2.5])
+                with col_mc1:
+                    st.markdown("**Simulation Parameters**")
+                    sim_trades = st.slider("Trades to Simulate (Future Horizon)", min_value=10, max_value=500, value=100, step=10)
+                    sim_count = st.slider("Parallel Universes (Simulations)", min_value=100, max_value=2000, value=1000, step=100)
+                    risk_threshold = st.number_input("Drawdown Danger Zone ($)", min_value=10.0, value=500.0, step=50.0)
+                    
+                    historical_pnls = mc_df['Net_PnL'].values
+                    
+                    # Core Bootstrap Engine powered by Numpy
+                    sim_data = np.random.choice(historical_pnls, size=(sim_count, sim_trades), replace=True)
+                    sim_paths = np.cumsum(sim_data, axis=1)
+                    
+                    peaks = np.maximum.accumulate(sim_paths, axis=1)
+                    drawdowns = peaks - sim_paths
+                    max_dds = np.max(drawdowns, axis=1)
+                    
+                    ruin_probability = (np.sum(max_dds >= risk_threshold) / sim_count) * 100
+                    median_ending_pnl = np.median(sim_paths[:, -1])
+                    worst_ending_pnl = np.min(sim_paths[:, -1])
+                    best_ending_pnl = np.max(sim_paths[:, -1])
+                    
+                    st.markdown("---")
+                    if ruin_probability > 20: ruin_color = "🔴"
+                    elif ruin_probability > 5: ruin_color = "🟡"
+                    else: ruin_color = "🟢"
+                    
+                    st.metric(f"Risk of -${risk_threshold:.2f} Drawdown", f"{ruin_color} {ruin_probability:.1f}%")
+                    st.metric("Median Expected P&L", f"${median_ending_pnl:.2f}")
+                    st.metric("Worst Case Scenario", f"${worst_ending_pnl:.2f}")
+
+                with col_mc2:
+                    fig_mc = go.Figure()
+                    
+                    # Plot only the first 150 paths so we don't freeze the browser
+                    plot_count = min(sim_count, 150)
+                    for i in range(plot_count):
+                        fig_mc.add_trace(go.Scatter(y=sim_paths[i], mode='lines', line=dict(width=1, color='rgba(38, 166, 154, 0.05)'), showlegend=False, hoverinfo='skip'))
+                    
+                    # Overlay the mathematical Median Expected Path
+                    median_path = np.median(sim_paths, axis=0)
+                    fig_mc.add_trace(go.Scatter(y=median_path, mode='lines', line=dict(width=3, color='#2196F3'), name='Median Expected Path'))
+                    
+                    fig_mc.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', 
+                                         xaxis=dict(title='Future Trade Number', gridcolor='rgba(128, 128, 128, 0.2)'), 
+                                         yaxis=dict(title='Simulated Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
+                    st.plotly_chart(fig_mc, use_container_width=True)
+            else:
+                st.info("Log at least 10 valid trades to unlock the Monte Carlo Simulator.")
+            # ---------------------------------------------
 
         st.divider()
         st.header("🧠 Reminder Center & Content Vault")
