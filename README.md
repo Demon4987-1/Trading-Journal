@@ -51,16 +51,20 @@ Step 1: Get Python & Setup your Folder Make sure you have Python installed on yo
 
 Step 2: Save the Code Open a text editor (like VS Code, or even Notepad), paste the entire Python script I shared, and save it inside that folder as dashboard.py.
 
-Step 3: Install the Required Libraries Open your computer's Terminal or Command Prompt, navigate to your new folder, and install the three required external libraries by running this exact command: Bash
+Step 3: Install the Required Libraries Open your computer's Terminal or Command Prompt, navigate to your new folder, and install the three required external libraries by running this exact command: 
+"
+Bash
 
 pip install streamlit pandas plotly
-
+"
 (Note: SQLite and the other modules are already built into Python natively!)
 
-Step 4: Launch the Vault Once the installation finishes, run this command in your terminal to start the engine: Bash
+Step 4: Launch the Vault Once the installation finishes, run this command in your terminal to start the engine: 
+"
+Bash
 
 streamlit run dashboard.py
-
+"
 Step 5: Start Journaling A local web browser tab will instantly pop up. The first time you run it, the Python script will automatically build your encrypted SQLite database (trading_journal.db) and the image folder right next to your code.
 
 Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file, and the dashboard will instantly populate!
