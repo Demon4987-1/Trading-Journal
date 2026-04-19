@@ -86,3 +86,24 @@ Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file, an
 
 <img width="1344" height="426" alt="firefox_v7PArmaxLt" src="https://github.com/user-attachments/assets/1ff07b5a-d6cc-40df-9057-3785da2991b2" />
 
+
+<img width="1306" height="301" alt="firefox_8lfz9DG1iy" src="https://github.com/user-attachments/assets/f4c41e98-1d5f-47ee-be41-fdb6bd5e4435" />
+
+
+<img width="1337" height="689" alt="BbQ8FXONLn" src="https://github.com/user-attachments/assets/1e96181f-bc6f-49dc-94e7-660be94a5d5b" />
+
+
+<img width="1325" height="590" alt="firefox_8BxzBh2qgy" src="https://github.com/user-attachments/assets/fcd37bc4-1597-4938-b2ca-dd4d54d6ee7f" />
+
+
+<img width="1335" height="562" alt="firefox_KWUu1Q2sIc" src="https://github.com/user-attachments/assets/2e3c63ee-d80a-43f6-94ef-213119aee474" />
+
+
+<img width="1330" height="339" alt="firefox_wAqGEmA072" src="https://github.com/user-attachments/assets/77636d36-b1c7-4c50-b7f1-ffb66bda498a" />
+
+
+<img width="1296" height="638" alt="firefox_j4WnvUBBw6" src="https://github.com/user-attachments/assets/d10546f5-89f6-488a-bdac-5546a4543a97" />
+
+
+
+
