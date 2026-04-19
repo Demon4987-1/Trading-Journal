@@ -10,6 +10,10 @@ import re
 import json
 import plotly.graph_objects as go
 
+# --- The Cache-Busting Trigger ---
+if 'reset_trigger' not in st.session_state:
+    st.session_state.reset_trigger = 0
+
 # --- Configuration & Setup ---
 st.set_page_config(page_title="Trading Journal Vault", layout="wide")
 
@@ -50,7 +54,6 @@ LESSON_TAGS = [
     "🏆 Win: Took the Planned Stop"
 ]
 
-# --- NEW: Al Brooks Price Action Confluences ---
 CONFLUENCE_TAGS = [
     "📍 Context: HTF Alignment",
     "📍 Context: TR Boundary (Top/Bottom)",
@@ -806,7 +809,6 @@ else:
     
     st.header("Dashboard Filters")
     
-    # --- THE FIX: Expanded 4-Column Global Filters ---
     col_filt1, col_filt2, col_filt3, col_filt4 = st.columns(4)
     with col_filt1:
         instrument_list = sorted(list(master_df['Instrument'].dropna().unique()))
@@ -827,7 +829,6 @@ else:
     with col_filt4:
         min_score, max_score = st.slider("Filter by Execution Score", 0, 10, (0, 10))
         master_df = master_df[(master_df['score'] >= min_score) & (master_df['score'] <= max_score)]
-    # -------------------------------------------------
             
     st.divider()
     
@@ -1067,7 +1068,6 @@ else:
                     v_pnl_str = f"+${v_row['Net_PnL']:.2f}" if v_row['Net_PnL'] > 0 else f"-${abs(v_row['Net_PnL']):.2f}"
                     v_tags_rendered = " | ".join([f"`{t.strip()}`" for t in str(v_row['lesson_tags']).split(',') if t.strip()])
                     
-                    # --- NEW: Vault Cards display Confluences ---
                     c_tags_rendered = " | ".join([f"`{t.strip()}`" for t in str(v_row['confluence_tags']).split(',') if t.strip()])
                     
                     with st.expander(f"{v_color} {v_row['Date_str']} | {v_row['Instrument']} | {v_pnl_str} | Strategy: {v_row['strategy']}", expanded=False):
@@ -1075,7 +1075,6 @@ else:
                         if c_tags_rendered:
                             st.markdown(f"**PA Confluences:** {c_tags_rendered}")
                         st.markdown("---")
-                        # --------------------------------------------
                         
                         col_v1, col_v2 = st.columns([1, 2])
                         with col_v1:
@@ -1247,45 +1246,48 @@ else:
                     
                 if display_df.empty: st.info("No trades match your current filter settings for this specific day.")
                 
-                # --- NEW UI: Bulk Edit Mode for Scaled Positions ---
                 if not display_df.empty:
                     with st.expander("⚡ Bulk Edit Scaled Positions (Group Review)", expanded=False):
                         st.markdown("Select multiple executions below to treat them as a single position. The strategy, tags, notes, and screenshot you provide here will be instantly applied to all selected trades simultaneously.")
                         
-                        trade_options = {}
+                        trade_map = {}
                         for _, row in display_df.iterrows():
-                            t_str = f"{row['trade_type'].upper()} {row['Instrument']} @ {row['Timestamp']} | Net: ${row['Net_PnL']:.2f}"
-                            trade_options[t_str] = row['trade_id']
+                            label = f"{row['trade_type'].upper()} {row['Instrument']} @ {row['Timestamp']} | Net: ${row['Net_PnL']:.2f} (Qty: {row['Qty']})"
+                            trade_map[label] = row['trade_id']
                             
-                        selected_bulk_trades = st.multiselect("Select Executions to Group:", list(trade_options.keys()), key=f"bulk_sel_{date_str}")
+                        selected_labels = st.multiselect(
+                            "Select Executions to Group:", 
+                            options=list(trade_map.keys()),
+                            key=f"bulk_sel_{date_str}"
+                        )
                         
-                        if selected_bulk_trades:
+                        if selected_labels:
                             with st.form(key=f"bulk_form_{date_str}"):
                                 col_b1, col_b2 = st.columns([1, 2.5])
                                 with col_b1:
-                                    bulk_strategy = st.selectbox("Strategy Category", ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"])
-                                    bulk_score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, 5)
-                                    bulk_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS)
-                                    bulk_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS)
+                                    bulk_strategy = st.selectbox("Strategy Category", ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"], key=f"b_strat_{date_str}")
+                                    bulk_score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, 5, key=f"b_score_{date_str}")
+                                    bulk_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, key=f"b_tags_{date_str}")
+                                    bulk_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, key=f"b_conf_{date_str}")
                                     st.markdown("---")
-                                    bulk_screenshot = st.file_uploader("Attach Screenshot (Applies to ALL)", type=['png', 'jpg', 'jpeg'])
+                                    bulk_screenshot = st.file_uploader("Attach Screenshot (Applies to ALL)", type=['png', 'jpg', 'jpeg'], key=f"b_img_{date_str}")
                                     
                                 with col_b2:
-                                    bulk_gb = st.text_area("1. What went good and what went bad?", height=80)
-                                    bulk_imp = st.text_area("2. What can I improve?", height=80)
-                                    bulk_act = st.text_area("3. How I plan to improve it?", height=80)
-                                    bulk_notes = st.text_area("Additional Notes / Chart Links:", height=68)
+                                    bulk_gb = st.text_area("1. What went good and what went bad?", height=80, key=f"b_gb_{date_str}")
+                                    bulk_imp = st.text_area("2. What can I improve?", height=80, key=f"b_imp_{date_str}")
+                                    bulk_act = st.text_area("3. How I plan to improve it?", height=80, key=f"b_act_{date_str}")
+                                    bulk_notes = st.text_area("Additional Notes / Chart Links:", height=68, key=f"b_notes_{date_str}")
                                     st.markdown("<br><br>", unsafe_allow_html=True)
                                     bulk_submit = st.form_submit_button("💾 Apply Review to All Selected Trades", use_container_width=True)
                                     
                                 if bulk_submit:
                                     img_bytes = bulk_screenshot.read() if bulk_screenshot else None
                                     
-                                    for t_str in selected_bulk_trades:
-                                        t_id = trade_options[t_str]
-                                        tags_string = ",".join(bulk_tags)
-                                        conf_string = ",".join(bulk_conf)
-                                        
+                                    tags_string = ",".join(bulk_tags)
+                                    conf_string = ",".join(bulk_conf)
+                                    
+                                    for label in selected_labels:
+                                        t_id = trade_map[label]
                                         save_trade_note_to_db(t_id, bulk_notes, bulk_score, bulk_gb, bulk_imp, bulk_act, bulk_strategy, tags_string, conf_string)
                                         
                                         if img_bytes is not None:
@@ -1297,11 +1299,13 @@ else:
                                             with open(file_path, "wb") as f:
                                                 f.write(img_bytes)
                                                 
-                                    st.success(f"Successfully applied unified review to {len(selected_bulk_trades)} executions!")
+                                    # --- FIRES THE CACHE BUSTER ---
+                                    st.session_state.reset_trigger += 1
+                                    
+                                    st.success(f"Successfully applied unified review to {len(selected_labels)} executions!")
                                     time.sleep(1)
                                     st.rerun()
                 st.divider()
-                # ---------------------------------------------------
                 
                 for index, row in display_df.iterrows():
                     trade_id, instrument, timestamp = row['trade_id'], row['Instrument'], row['Timestamp']
@@ -1310,6 +1314,8 @@ else:
                     entry_time, exit_time = row['Entry_Time'], row['Exit_Time']
                     entry_price, exit_price = row['Entry_Price'], row['Exit_Price']
                     pnl_so_far = row['PnL_So_Far']
+                    
+                    rt = st.session_state.reset_trigger
                     
                     trade_color = "🟢" if net_pnl >= 0 else "🔴"
                     
@@ -1323,7 +1329,7 @@ else:
                     
                     trade_title = f"{trade_color} {trade_type.upper()} {instrument} @ {timestamp} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}"
                     with st.expander(trade_title, expanded=False):
-                        with st.form(key=f"review_form_{trade_id}"):
+                        with st.form(key=f"review_form_{trade_id}_{rt}"):
                             col_details, col_journal = st.columns([1, 2.5])
                             
                             with col_details:
@@ -1347,27 +1353,25 @@ else:
                                 else: st.write("**MFE / MAE:** No market data for window")
                                 st.markdown("---")
                                 
-                                confirm_del_trade = st.checkbox("Confirm Deletion", key=f"conf_trade_{trade_id}")
+                                confirm_del_trade = st.checkbox("Confirm Deletion", key=f"conf_trade_{trade_id}_{rt}")
                                 del_btn = st.form_submit_button("🗑️ Delete Trade")
                                 st.markdown("---")
                                 
                                 strategy_options = ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"]
                                 strat_val = row.get('strategy', 'Uncategorized')
                                 if strat_val not in strategy_options: strat_val = "Uncategorized"
-                                strategy_choice = st.selectbox("Strategy Category", strategy_options, index=strategy_options.index(strat_val), key=f"strat_{trade_id}")
-                                score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, int(row['score']), key=f"score_{trade_id}")
+                                strategy_choice = st.selectbox("Strategy Category", strategy_options, index=strategy_options.index(strat_val), key=f"strat_{trade_id}_{rt}")
+                                score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, int(row['score']), key=f"score_{trade_id}_{rt}")
                                 
                                 existing_tags = [t.strip() for t in str(row.get('lesson_tags', '')).split(',') if t.strip() in LESSON_TAGS]
-                                selected_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, default=existing_tags, key=f"tags_{trade_id}")
+                                selected_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, default=existing_tags, key=f"tags_{trade_id}_{rt}")
                                 
-                                # --- NEW UI: Form Entry for Confluence Tags ---
                                 existing_conf = [t.strip() for t in str(row.get('confluence_tags', '')).split(',') if t.strip() in CONFLUENCE_TAGS]
-                                selected_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, default=existing_conf, key=f"conf_{trade_id}")
-                                # ----------------------------------------------
+                                selected_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, default=existing_conf, key=f"conf_{trade_id}_{rt}")
                                 
                                 st.markdown("---")
                                 safe_trade_id = str(trade_id).replace("/", "-").replace("\\", "-")
-                                screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}")
+                                screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}_{rt}")
                                 
                                 existing_images = [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_trade_id)]
                                 if existing_images:
@@ -1376,10 +1380,10 @@ else:
                                     st.markdown(f"**📁 File:**\n`{os.path.abspath(img_path)}`")
                                     
                             with col_journal:
-                                good_bad = st.text_area("1. What went good and what went bad on that trade?", value=row['good_bad'], key=f"gb_{trade_id}", height=80)
-                                improve = st.text_area("2. What can I improve on that trade?", value=row['improve'], key=f"imp_{trade_id}", height=80)
-                                action_plan = st.text_area("3. How I plan to improve it for the next trade?", value=row['action_plan'], key=f"act_{trade_id}", height=80)
-                                general_notes = st.text_area("Additional Notes / Chart Links:", value=row['notes'], key=f"gen_{trade_id}", height=68)
+                                good_bad = st.text_area("1. What went good and what went bad on that trade?", value=row['good_bad'], key=f"gb_{trade_id}_{rt}", height=80)
+                                improve = st.text_area("2. What can I improve on that trade?", value=row['improve'], key=f"imp_{trade_id}_{rt}", height=80)
+                                action_plan = st.text_area("3. How I plan to improve it for the next trade?", value=row['action_plan'], key=f"act_{trade_id}_{rt}", height=80)
+                                general_notes = st.text_area("Additional Notes / Chart Links:", value=row['notes'], key=f"gen_{trade_id}_{rt}", height=68)
                                 
                                 st.markdown("<br><br>", unsafe_allow_html=True)
                                 save_btn = st.form_submit_button("Save Trade Review", use_container_width=True)
@@ -1402,16 +1406,17 @@ else:
                             tags_string = ",".join(selected_tags)
                             conf_string = ",".join(selected_conf)
                             
-                            # --- THE FIX: Saving Confluences to Database ---
                             save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice, tags_string, conf_string)
-                            # -----------------------------------------------
+                            
+                            # --- FIRES THE CACHE BUSTER ON INDIVIDUAL SAVE TOO ---
+                            st.session_state.reset_trigger += 1
                             
                             st.success("Trade review secured in vault!")
                             time.sleep(1)
                             st.rerun()
                             
                         st.markdown("---")
-                        if st.checkbox("📈 Load Interactive TradingView Chart", key=f"show_chart_{trade_id}"):
+                        if st.checkbox("📈 Load Interactive TradingView Chart", key=f"show_chart_{trade_id}_{rt}"):
                             try:
                                 trade_dt = pd.to_datetime(timestamp)
                                 start_time, end_time = trade_dt - timedelta(hours=16), trade_dt + timedelta(hours=16)
