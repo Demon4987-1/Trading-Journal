@@ -75,7 +75,7 @@ Step 5: Start Journaling A local web browser tab will instantly pop up. The firs
 
 **How to upload trades:**
 
-Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file (Performance tab), and the dashboard will instantly populate!
+Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file (Performance tab), click save and the dashboard will instantly populate!
 
 **How to add market data:**
 1) Go to tradingview and get the 1 minute chart of your instrument loaded, go backwards to load as many candles as you want.
