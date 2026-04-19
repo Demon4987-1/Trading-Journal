@@ -40,6 +40,8 @@ LESSON_TAGS = [
     "🛡️ Risk: Averaging Down",
     "🛡️ Risk: Moving Stop Loss",
     "🛡️ Risk: Risked Daily Max on One Trade",
+    "🛡️ Risk: Oversizing",
+    "🛡️ Risk: Undersizing",
     "⚙️ Tech: Ignored Higher Timeframe",
     "⚙️ Tech: Trading Into News",
     "⚙️ Tech: Front-Running the Setup",
@@ -48,13 +50,34 @@ LESSON_TAGS = [
     "🏆 Win: Took the Planned Stop"
 ]
 
+# --- NEW: Al Brooks Price Action Confluences ---
+CONFLUENCE_TAGS = [
+    "📍 Context: HTF Alignment",
+    "📍 Context: TR Boundary (Top/Bottom)",
+    "📍 Context: Major Trendline / Channel Line",
+    "📍 Context: Key Magnet Level",
+    "📍 Context: Measured Move Target",
+    "🎯 Setup: H2 / L2 (Second Entry)",
+    "🎯 Setup: Wedge Flag (3 Pushes)",
+    "🎯 Setup: Major Trend Reversal (MTR)",
+    "🎯 Setup: Failed Breakout (FBO)",
+    "🎯 Setup: Breakout Pullback (BOPB)",
+    "🎯 Setup: Micro Double Top / Bottom",
+    "🕯️ Signal: Strong Trend Bar",
+    "🕯️ Signal: Perfect Reversal Bar",
+    "🕯️ Signal: Inside Bar (ii / ioi)",
+    "🕯️ Signal: Outside Bar",
+    "🪤 Trap: Vacuum Exhaustion",
+    "🪤 Trap: Trapped Traders (2nd Entry Trap)"
+]
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
     tables = [
         '''CREATE TABLE IF NOT EXISTS trades (trade_id TEXT PRIMARY KEY, instrument TEXT, timestamp TEXT, pnl REAL, duration TEXT, qty INTEGER, entry_time TEXT, exit_time TEXT, entry_price REAL, exit_price REAL, commission REAL, net_pnl REAL, trade_type TEXT, is_deleted INTEGER DEFAULT 0)''',
-        '''CREATE TABLE IF NOT EXISTS journal_entries (trade_id TEXT PRIMARY KEY, notes TEXT, score INTEGER DEFAULT 0, good_bad TEXT, improve TEXT, action_plan TEXT, strategy TEXT DEFAULT 'Uncategorized', lesson_tags TEXT DEFAULT '')''',
+        '''CREATE TABLE IF NOT EXISTS journal_entries (trade_id TEXT PRIMARY KEY, notes TEXT, score INTEGER DEFAULT 0, good_bad TEXT, improve TEXT, action_plan TEXT, strategy TEXT DEFAULT 'Uncategorized', lesson_tags TEXT DEFAULT '', confluence_tags TEXT DEFAULT '')''',
         '''CREATE TABLE IF NOT EXISTS daily_journal (date_str TEXT PRIMARY KEY, goal TEXT, reflection TEXT)''',
         '''CREATE TABLE IF NOT EXISTS trading_rules (id TEXT PRIMARY KEY, max_risk TEXT, setups TEXT, runners TEXT)''',
         '''CREATE TABLE IF NOT EXISTS weekly_goals (id TEXT PRIMARY KEY, goal TEXT, mon_status TEXT, mon_how TEXT, mon_plan TEXT, tue_status TEXT, tue_how TEXT, tue_plan TEXT, wed_status TEXT, wed_how TEXT, wed_plan TEXT, thu_status TEXT, thu_how TEXT, thu_plan TEXT, fri_status TEXT, fri_how TEXT, fri_plan TEXT, history TEXT)''',
@@ -84,6 +107,7 @@ def init_db():
         "ALTER TABLE journal_entries ADD COLUMN action_plan TEXT",
         "ALTER TABLE journal_entries ADD COLUMN strategy TEXT DEFAULT 'Uncategorized'",
         "ALTER TABLE journal_entries ADD COLUMN lesson_tags TEXT DEFAULT ''",
+        "ALTER TABLE journal_entries ADD COLUMN confluence_tags TEXT DEFAULT ''",
         "ALTER TABLE trading_rules ADD COLUMN prep_day TEXT",
         "ALTER TABLE trading_rules ADD COLUMN prep_week TEXT",
         "ALTER TABLE trading_rules ADD COLUMN max_risk_day TEXT",
@@ -276,7 +300,7 @@ def insert_market_data_to_db(df, instrument):
 
 def load_all_trades():
     conn = sqlite3.connect(DB_FILE)
-    query = '''SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy, j.lesson_tags FROM trades t LEFT JOIN journal_entries j ON t.trade_id = j.trade_id WHERE t.is_deleted = 0 OR t.is_deleted IS NULL'''
+    query = '''SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy, j.lesson_tags, j.confluence_tags FROM trades t LEFT JOIN journal_entries j ON t.trade_id = j.trade_id WHERE t.is_deleted = 0 OR t.is_deleted IS NULL'''
     df = pd.read_sql_query(query, conn)
     conn.close()
     
@@ -297,6 +321,7 @@ def load_all_trades():
         df['action_plan'] = df['action_plan'].fillna("")
         df['strategy'] = df['strategy'].fillna("Uncategorized")
         df['lesson_tags'] = df.get('lesson_tags', '').fillna("")
+        df['confluence_tags'] = df.get('confluence_tags', '').fillna("")
     return df
 
 @st.cache_data
@@ -398,9 +423,9 @@ def empty_recycle_bin_db():
     conn.commit()
     conn.close()
 
-def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str):
+def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str, conf_tags_str):
     conn = sqlite3.connect(DB_FILE)
-    conn.execute('''REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str))
+    conn.execute('''REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags, confluence_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str, conf_tags_str))
     conn.commit()
     conn.close()
 
@@ -777,22 +802,32 @@ master_df = load_all_trades()
 if master_df.empty:
     st.info("Your vault is currently empty. Please upload a Tradovate CSV file using the menu above to begin.")
 else:
-    # --- THE FIX: Pipeline Shift - Generating the Universal Date String immediately ---
     master_df['Date_str'] = master_df['Datetime'].dt.strftime('%A, %B %d, %Y')
     
     st.header("Dashboard Filters")
-    col_filt1, col_filt2, col_filt3 = st.columns(3)
+    
+    # --- THE FIX: Expanded 4-Column Global Filters ---
+    col_filt1, col_filt2, col_filt3, col_filt4 = st.columns(4)
     with col_filt1:
         instrument_list = sorted(list(master_df['Instrument'].dropna().unique()))
-        selected_instruments = st.multiselect("Filter by Instrument (leave blank to show all)", instrument_list)
+        selected_instruments = st.multiselect("Filter by Instrument", instrument_list)
         if selected_instruments: master_df = master_df[master_df['Instrument'].isin(selected_instruments)]
     with col_filt2:
         strategy_list = sorted(list(master_df['strategy'].dropna().unique()))
-        selected_strategies = st.multiselect("Filter by Strategy (leave blank to show all)", strategy_list)
+        selected_strategies = st.multiselect("Filter by Strategy", strategy_list)
         if selected_strategies: master_df = master_df[master_df['strategy'].isin(selected_strategies)]
     with col_filt3:
-        min_score, max_score = st.slider("Filter by Trade Score", 0, 10, (0, 10))
+        selected_confluences = st.multiselect("Filter by PA Confluences", CONFLUENCE_TAGS)
+        if selected_confluences:
+            def has_confluence(tag_string, tags_to_find):
+                if pd.isna(tag_string) or not tag_string: return False
+                row_tags = [t.strip() for t in str(tag_string).split(',')]
+                return any(t in row_tags for t in tags_to_find)
+            master_df = master_df[master_df['confluence_tags'].apply(lambda x: has_confluence(x, selected_confluences))]
+    with col_filt4:
+        min_score, max_score = st.slider("Filter by Execution Score", 0, 10, (0, 10))
         master_df = master_df[(master_df['score'] >= min_score) & (master_df['score'] <= max_score)]
+    # -------------------------------------------------
             
     st.divider()
     
@@ -801,7 +836,6 @@ else:
     else:
         st.header("Historical Overview & Equity Curve")
         
-        # --- NEW ENGINE: Streak & Drawdown Math ---
         master_df = master_df.sort_values(by='Datetime').reset_index(drop=True)
         
         current_win_streak = 0
@@ -826,7 +860,6 @@ else:
         master_df['Running_Peak'] = master_df['Running_Peak'].clip(lower=0.0) 
         master_df['Drawdown'] = master_df['Cumulative Net P&L'] - master_df['Running_Peak']
         max_drawdown = master_df['Drawdown'].min() if len(master_df) > 0 else 0.0
-        # ------------------------------------------
 
         total_gross = master_df['P&L'].sum()
         total_commissions = master_df['Commission'].sum()
@@ -853,13 +886,11 @@ else:
         col7.metric("Gross Winning Trades", f"{winning_trades_count}")
         col8.metric("Gross Losing Trades", f"{losing_trades_count}")
         
-        # --- NEW UI: The Psychological Stress Row ---
         col9, col10, col11, col12 = st.columns(4)
         col9.metric("Max Consecutive Wins", f"{max_win_streak}")
         col10.metric("Max Consecutive Losses", f"{max_loss_streak}")
         col11.metric("Max Drawdown", f"-${abs(max_drawdown):.2f}")
         col12.metric("Avg Trade P&L", f"${avg_trade_pnl:.2f}" if avg_trade_pnl >= 0 else f"-${abs(avg_trade_pnl):.2f}")
-        # --------------------------------------------
 
         st.markdown("---")
         col_eq_title, col_eq_tog = st.columns([3, 1])
@@ -872,7 +903,6 @@ else:
         fig_equity = go.Figure()
         fig_equity.add_trace(go.Scatter(x=master_df['Datetime'], y=master_df['Cumulative Net P&L'], mode='lines', fill='tozeroy', line=dict(color='#26a69a', width=3), fillcolor='rgba(38, 166, 154, 0.1)', name='Cumulative P&L'))
         
-        # --- NEW UI: The Drawdown Dual-Axis Toggle ---
         if show_drawdown:
             fig_equity.add_trace(go.Scatter(x=master_df['Datetime'], y=master_df['Drawdown'], mode='lines', fill='tozeroy', line=dict(color='#ef5350', width=2), fillcolor='rgba(239, 83, 80, 0.2)', name='Drawdown', yaxis='y2'))
             fig_equity.update_layout(
@@ -887,7 +917,6 @@ else:
                     tickfont=dict(color='#ef5350')
                 )
             )
-        # ---------------------------------------------
         
         fig_equity.update_layout(height=400, margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(type='date', rangebreaks=[dict(bounds=["sat", "sun"])]), yaxis=dict(tickprefix="$"), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', hovermode="x unified")
         fig_equity.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128, 128, 128, 0.2)')
@@ -979,7 +1008,6 @@ else:
             hm_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
             selected_hm_inst = st.multiselect("Filter Heatmap by Instrument (leave blank to chart all):", hm_instruments, key="hm_inst_filter")
             
-            # --- THE FIX: Heatmap Date Filtering Isolation ---
             hm_dates = list(master_df['Date_str'].dropna().unique())[::-1]
             selected_hm_dates = st.multiselect("Filter Heatmap by Trading Day (leave blank to chart all):", hm_dates, key="hm_date_filter")
             
@@ -988,7 +1016,6 @@ else:
                 hm_target_df = hm_target_df[hm_target_df['Instrument'].isin(selected_hm_inst)]
             if selected_hm_dates:
                 hm_target_df = hm_target_df[hm_target_df['Date_str'].isin(selected_hm_dates)]
-            # ------------------------------------------------
             
             heatmap_data = []
             for _, row in hm_target_df.iterrows():
@@ -1028,13 +1055,11 @@ else:
             if vault_df.empty:
                 st.info("No trades found matching these specific lessons.")
             else:
-                # --- NEW UI: Vault Date Filtering ---
                 vault_dates = list(vault_df['Date_str'].unique())[::-1]
                 selected_vault_dates = st.multiselect("Filter Lessons by Trading Day (leave blank to show all):", vault_dates, key="vault_date_filter")
                 
                 if selected_vault_dates:
                     vault_df = vault_df[vault_df['Date_str'].isin(selected_vault_dates)]
-                # ------------------------------------
                 
                 st.success(f"Extracted {len(vault_df)} flashcards matching your criteria.")
                 for _, v_row in vault_df.iterrows():
@@ -1042,9 +1067,15 @@ else:
                     v_pnl_str = f"+${v_row['Net_PnL']:.2f}" if v_row['Net_PnL'] > 0 else f"-${abs(v_row['Net_PnL']):.2f}"
                     v_tags_rendered = " | ".join([f"`{t.strip()}`" for t in str(v_row['lesson_tags']).split(',') if t.strip()])
                     
+                    # --- NEW: Vault Cards display Confluences ---
+                    c_tags_rendered = " | ".join([f"`{t.strip()}`" for t in str(v_row['confluence_tags']).split(',') if t.strip()])
+                    
                     with st.expander(f"{v_color} {v_row['Date_str']} | {v_row['Instrument']} | {v_pnl_str} | Strategy: {v_row['strategy']}", expanded=False):
                         st.markdown(f"**Tagged Lessons:** {v_tags_rendered}")
+                        if c_tags_rendered:
+                            st.markdown(f"**PA Confluences:** {c_tags_rendered}")
                         st.markdown("---")
+                        # --------------------------------------------
                         
                         col_v1, col_v2 = st.columns([1, 2])
                         with col_v1:
@@ -1060,7 +1091,6 @@ else:
                             st.markdown(f"**Action Plan:**\n> {v_row['action_plan']}")
                             st.markdown(f"**General Notes:**\n> {v_row['notes']}")
                             
-                        # --- NEW UI: Vault TradingView Integration ---
                         st.markdown("---")
                         if st.checkbox("📈 Load Interactive TradingView Chart", key=f"show_chart_vault_{v_row['trade_id']}"):
                             try:
@@ -1073,7 +1103,6 @@ else:
                                     components.html(html_chart, height=450)
                                 else: st.warning("No market data available for this 32-hour window.")
                             except: pass 
-                        # ---------------------------------------------
 
         st.divider()
 
@@ -1146,7 +1175,6 @@ else:
             daily_df = daily_df.sort_values(by='Datetime', ascending=True).reset_index(drop=True)
             daily_df['PnL_So_Far'] = daily_df['Net_PnL'].cumsum().shift(1).fillna(0.0)
             
-            # --- NEW ENGINE: Intraday Streaks & Drawdown ---
             d_win_streak, d_max_win_streak = 0, 0
             d_loss_streak, d_max_loss_streak = 0, 0
             
@@ -1166,7 +1194,6 @@ else:
             daily_df['Daily_Peak'] = daily_df['Daily_Cum_PnL'].cummax().clip(lower=0.0)
             daily_df['Daily_Drawdown'] = daily_df['Daily_Cum_PnL'] - daily_df['Daily_Peak']
             daily_max_drawdown = daily_df['Daily_Drawdown'].min() if len(daily_df) > 0 else 0.0
-            # -----------------------------------------------
             
             daily_gross = daily_df['P&L'].sum()
             daily_comm = daily_df['Commission'].sum()
@@ -1200,8 +1227,6 @@ else:
                     st.success("Daily routine saved successfully.")
                 
                 st.divider()
-                
-                # --- NEW UI: Daily Tilt & Stress Metrics ---
                 st.markdown("### 🧠 Intraday Psychological Stress")
                 col_d1, col_d2, col_d3, col_d4 = st.columns(4)
                 col_d1.metric("Intraday Max Cons. Wins", f"{d_max_win_streak}")
@@ -1209,7 +1234,6 @@ else:
                 col_d3.metric("Intraday Max Drawdown", f"-${abs(daily_max_drawdown):.2f}")
                 col_d4.metric("Daily Avg Trade P&L", f"${daily_avg_pnl:.2f}" if daily_avg_pnl >= 0 else f"-${abs(daily_avg_pnl):.2f}")
                 st.divider()
-                # -------------------------------------------
                 
                 st.markdown("### 📊 Trade Executions")
                 
@@ -1222,6 +1246,62 @@ else:
                 else: display_df = display_df.sort_values(by='Datetime', ascending=True)
                     
                 if display_df.empty: st.info("No trades match your current filter settings for this specific day.")
+                
+                # --- NEW UI: Bulk Edit Mode for Scaled Positions ---
+                if not display_df.empty:
+                    with st.expander("⚡ Bulk Edit Scaled Positions (Group Review)", expanded=False):
+                        st.markdown("Select multiple executions below to treat them as a single position. The strategy, tags, notes, and screenshot you provide here will be instantly applied to all selected trades simultaneously.")
+                        
+                        trade_options = {}
+                        for _, row in display_df.iterrows():
+                            t_str = f"{row['trade_type'].upper()} {row['Instrument']} @ {row['Timestamp']} | Net: ${row['Net_PnL']:.2f}"
+                            trade_options[t_str] = row['trade_id']
+                            
+                        selected_bulk_trades = st.multiselect("Select Executions to Group:", list(trade_options.keys()), key=f"bulk_sel_{date_str}")
+                        
+                        if selected_bulk_trades:
+                            with st.form(key=f"bulk_form_{date_str}"):
+                                col_b1, col_b2 = st.columns([1, 2.5])
+                                with col_b1:
+                                    bulk_strategy = st.selectbox("Strategy Category", ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"])
+                                    bulk_score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, 5)
+                                    bulk_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS)
+                                    bulk_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS)
+                                    st.markdown("---")
+                                    bulk_screenshot = st.file_uploader("Attach Screenshot (Applies to ALL)", type=['png', 'jpg', 'jpeg'])
+                                    
+                                with col_b2:
+                                    bulk_gb = st.text_area("1. What went good and what went bad?", height=80)
+                                    bulk_imp = st.text_area("2. What can I improve?", height=80)
+                                    bulk_act = st.text_area("3. How I plan to improve it?", height=80)
+                                    bulk_notes = st.text_area("Additional Notes / Chart Links:", height=68)
+                                    st.markdown("<br><br>", unsafe_allow_html=True)
+                                    bulk_submit = st.form_submit_button("💾 Apply Review to All Selected Trades", use_container_width=True)
+                                    
+                                if bulk_submit:
+                                    img_bytes = bulk_screenshot.read() if bulk_screenshot else None
+                                    
+                                    for t_str in selected_bulk_trades:
+                                        t_id = trade_options[t_str]
+                                        tags_string = ",".join(bulk_tags)
+                                        conf_string = ",".join(bulk_conf)
+                                        
+                                        save_trade_note_to_db(t_id, bulk_notes, bulk_score, bulk_gb, bulk_imp, bulk_act, bulk_strategy, tags_string, conf_string)
+                                        
+                                        if img_bytes is not None:
+                                            safe_t_id = str(t_id).replace("/", "-").replace("\\", "-")
+                                            for old_img in [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_t_id)]:
+                                                try: os.remove(os.path.join(IMAGE_DIR, old_img))
+                                                except: pass
+                                            file_path = os.path.join(IMAGE_DIR, f"{safe_t_id}_{bulk_screenshot.name}")
+                                            with open(file_path, "wb") as f:
+                                                f.write(img_bytes)
+                                                
+                                    st.success(f"Successfully applied unified review to {len(selected_bulk_trades)} executions!")
+                                    time.sleep(1)
+                                    st.rerun()
+                st.divider()
+                # ---------------------------------------------------
                 
                 for index, row in display_df.iterrows():
                     trade_id, instrument, timestamp = row['trade_id'], row['Instrument'], row['Timestamp']
@@ -1280,6 +1360,11 @@ else:
                                 existing_tags = [t.strip() for t in str(row.get('lesson_tags', '')).split(',') if t.strip() in LESSON_TAGS]
                                 selected_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, default=existing_tags, key=f"tags_{trade_id}")
                                 
+                                # --- NEW UI: Form Entry for Confluence Tags ---
+                                existing_conf = [t.strip() for t in str(row.get('confluence_tags', '')).split(',') if t.strip() in CONFLUENCE_TAGS]
+                                selected_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, default=existing_conf, key=f"conf_{trade_id}")
+                                # ----------------------------------------------
+                                
                                 st.markdown("---")
                                 safe_trade_id = str(trade_id).replace("/", "-").replace("\\", "-")
                                 screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}")
@@ -1315,7 +1400,12 @@ else:
                                 with open(file_path, "wb") as f: f.write(screenshot.getbuffer())
                                 
                             tags_string = ",".join(selected_tags)
-                            save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice, tags_string)
+                            conf_string = ",".join(selected_conf)
+                            
+                            # --- THE FIX: Saving Confluences to Database ---
+                            save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice, tags_string, conf_string)
+                            # -----------------------------------------------
+                            
                             st.success("Trade review secured in vault!")
                             time.sleep(1)
                             st.rerun()
