@@ -80,3 +80,9 @@ Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file, an
 3) Download in "ISO Time" format
 4) In the tab of market data in the journal, upload the file and write the exact name of the ticker (i.e MNQM6) that the data corresponds to and click on save
 5) The Tradingview intergration should be working in the bottom section of the individual trade reviews.
+
+
+
+
+<img width="1344" height="426" alt="firefox_v7PArmaxLt" src="https://github.com/user-attachments/assets/1ff07b5a-d6cc-40df-9057-3785da2991b2" />
+
