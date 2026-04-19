@@ -105,5 +105,6 @@ Just expand the "Upload New Trades" tab, drop in your raw Tradovate CSV file, an
 <img width="1296" height="638" alt="firefox_j4WnvUBBw6" src="https://github.com/user-attachments/assets/d10546f5-89f6-488a-bdac-5546a4543a97" />
 
 
+<img width="1294" height="384" alt="firefox_IrcGIYu57w" src="https://github.com/user-attachments/assets/7241fe2b-411c-4581-9d77-619a25d3cb40" />
 
 
