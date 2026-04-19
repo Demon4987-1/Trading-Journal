@@ -1039,6 +1039,40 @@ else:
             else:
                 st.info("Upload Market Data to generate the Scalper's Heatmap.")
 
+            # --- NEW UI: The Hope Metric Scatter Plot ---
+            st.markdown("---")
+            st.subheader("6. Trade Duration vs. Profitability (The 'Hope' Metric)")
+            st.markdown("Visualizes how long you hold trades versus how much they pay. If your losing trades cluster to the right of your winning trades, it proves you are holding and hoping instead of cutting losses.")
+            
+            hope_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+            selected_hope_inst = st.multiselect("Filter Hope Metric by Instrument (leave blank to chart all):", hope_instruments, key="hope_inst_filter")
+            
+            hope_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+            selected_hope_dates = st.multiselect("Filter Hope Metric by Trading Day (leave blank to chart all):", hope_dates, key="hope_date_filter")
+            
+            dur_df = master_df.copy()
+            if selected_hope_inst:
+                dur_df = dur_df[dur_df['Instrument'].isin(selected_hope_inst)]
+            if selected_hope_dates:
+                dur_df = dur_df[dur_df['Date_str'].isin(selected_hope_dates)]
+            
+            dur_df['Dur_Secs'] = dur_df['Duration'].apply(parse_duration_to_seconds)
+            dur_df = dur_df[dur_df['Dur_Secs'] > 0] 
+            
+            if not dur_df.empty:
+                fig_dur = go.Figure()
+                
+                wins_dur = dur_df[dur_df['Net_PnL'] > 0]
+                fig_dur.add_trace(go.Scatter(x=wins_dur['Dur_Secs'], y=wins_dur['Net_PnL'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=wins_dur['Instrument'] + " | " + wins_dur['Duration']))
+                
+                loss_dur = dur_df[dur_df['Net_PnL'] <= 0]
+                fig_dur.add_trace(go.Scatter(x=loss_dur['Dur_Secs'], y=loss_dur['Net_PnL'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=loss_dur['Instrument'] + " | " + loss_dur['Duration']))
+                
+                fig_dur.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Trade Duration (Seconds)', gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
+                st.plotly_chart(fig_dur, use_container_width=True)
+            else:
+                st.info("No duration data available to plot.")
+
         st.divider()
         st.header("🧠 Reminder Center & Content Vault")
         st.markdown("Filter your historical trades by the psychological and technical lessons they taught you. Use this to instantly generate YouTube script materials or prep for your trading day.")
@@ -1194,6 +1228,15 @@ else:
             daily_df['Daily_Drawdown'] = daily_df['Daily_Cum_PnL'] - daily_df['Daily_Peak']
             daily_max_drawdown = daily_df['Daily_Drawdown'].min() if len(daily_df) > 0 else 0.0
             
+            daily_longs = daily_df[daily_df['trade_type'].str.upper() == 'LONG']
+            daily_shorts = daily_df[daily_df['trade_type'].str.upper() == 'SHORT']
+            
+            daily_long_wins = len(daily_longs[daily_longs['Net_PnL'] > 0])
+            daily_short_wins = len(daily_shorts[daily_shorts['Net_PnL'] > 0])
+            
+            daily_long_pnl = daily_longs['Net_PnL'].sum()
+            daily_short_pnl = daily_shorts['Net_PnL'].sum()
+            
             daily_gross = daily_df['P&L'].sum()
             daily_comm = daily_df['Commission'].sum()
             daily_net = daily_df['Net_PnL'].sum()
@@ -1226,12 +1269,19 @@ else:
                     st.success("Daily routine saved successfully.")
                 
                 st.divider()
-                st.markdown("### 🧠 Intraday Psychological Stress")
+                st.markdown("### 🧠 Intraday Psychological Stress & Bias")
                 col_d1, col_d2, col_d3, col_d4 = st.columns(4)
                 col_d1.metric("Intraday Max Cons. Wins", f"{d_max_win_streak}")
                 col_d2.metric("Intraday Max Cons. Losses", f"{d_max_loss_streak}")
                 col_d3.metric("Intraday Max Drawdown", f"-${abs(daily_max_drawdown):.2f}")
                 col_d4.metric("Daily Avg Trade P&L", f"${daily_avg_pnl:.2f}" if daily_avg_pnl >= 0 else f"-${abs(daily_avg_pnl):.2f}")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                col_d5, col_d6, col_d7, col_d8 = st.columns(4)
+                col_d5.metric("Long Trades Won", f"{daily_long_wins} / {len(daily_longs)}")
+                col_d6.metric("Short Trades Won", f"{daily_short_wins} / {len(daily_shorts)}")
+                col_d7.metric("Net Long P&L", f"${daily_long_pnl:.2f}" if daily_long_pnl >= 0 else f"-${abs(daily_long_pnl):.2f}")
+                col_d8.metric("Net Short P&L", f"${daily_short_pnl:.2f}" if daily_short_pnl >= 0 else f"-${abs(daily_short_pnl):.2f}")
                 st.divider()
                 
                 st.markdown("### 📊 Trade Executions")
@@ -1299,7 +1349,10 @@ else:
                                             with open(file_path, "wb") as f:
                                                 f.write(img_bytes)
                                                 
-                                    # --- FIRES THE CACHE BUSTER ---
+                                        keys_to_clear = [f"strat_{t_id}", f"score_{t_id}", f"tags_{t_id}", f"conf_{t_id}", f"gb_{t_id}", f"imp_{t_id}", f"act_{t_id}", f"gen_{t_id}"]
+                                        for k in keys_to_clear:
+                                            st.session_state.pop(k, None)
+                                                
                                     st.session_state.reset_trigger += 1
                                     
                                     st.success(f"Successfully applied unified review to {len(selected_labels)} executions!")
@@ -1408,7 +1461,6 @@ else:
                             
                             save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice, tags_string, conf_string)
                             
-                            # --- FIRES THE CACHE BUSTER ON INDIVIDUAL SAVE TOO ---
                             st.session_state.reset_trigger += 1
                             
                             st.success("Trade review secured in vault!")
