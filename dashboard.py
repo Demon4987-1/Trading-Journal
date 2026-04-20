@@ -1786,9 +1786,120 @@ else:
                     st.info("Not enough sequential trade data to calculate Gap metrics. (Overlapping scale-ins are ignored).")
             # -----------------------------------------------
 
+            # --- NEW UI: The Time-in-Trade Decay Curve ---
+            st.markdown("---")
+            st.subheader("16. The Time-in-Trade Decay Curve (The 'Expiration' Timer)")
+            st.markdown("Plots your Win Rate and profitability against your total hold time. Mathematically reveals the exact 'expiration date' of your setups.")
+            
+            if st.toggle("⏳ Run Time-in-Trade Decay Analysis", key="run_decay"):
+                
+                # --- NEW UI: Localized Filters ---
+                col_dec1, col_dec2 = st.columns(2)
+                with col_dec1:
+                    dec_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                    selected_dec_inst = st.multiselect("Filter Decay Curve by Instrument:", dec_instruments, key="dec_inst_filter")
+                with col_dec2:
+                    dec_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                    selected_dec_dates = st.multiselect("Filter Decay Curve by Trading Day:", dec_dates, key="dec_date_filter")
+                # ---------------------------------
+                    
+                decay_df = master_df.dropna(subset=['Net_PnL']).copy()
+                
+                if selected_dec_inst:
+                    decay_df = decay_df[decay_df['Instrument'].isin(selected_dec_inst)]
+                if selected_dec_dates:
+                    decay_df = decay_df[decay_df['Date_str'].isin(selected_dec_dates)]
+                    
+                # Calculate absolute duration in minutes
+                decay_df['Entry_DT'] = pd.to_datetime(decay_df['Entry_Time'], errors='coerce')
+                decay_df['Exit_DT'] = pd.to_datetime(decay_df['Exit_Time'], errors='coerce')
+                decay_df['Hold_Mins'] = (decay_df['Exit_DT'] - decay_df['Entry_DT']).dt.total_seconds() / 60.0
+                
+                decay_df = decay_df[decay_df['Hold_Mins'] > 0].copy() # Filter out any instant scratches or bad data
+                
+                if len(decay_df) > 0:
+                    def categorize_hold(mins):
+                        if mins <= 1: return "1. < 1 Min"
+                        elif mins <= 3: return "2. 1 to 3 Mins"
+                        elif mins <= 5: return "3. 3 to 5 Mins"
+                        elif mins <= 10: return "4. 5 to 10 Mins"
+                        elif mins <= 30: return "5. 10 to 30 Mins"
+                        else: return "6. > 30 Mins"
+                        
+                    decay_df['Hold_Category'] = decay_df['Hold_Mins'].apply(categorize_hold)
+                    
+                    decay_stats = decay_df.groupby('Hold_Category').agg(
+                        Trade_Count=('Net_PnL', 'count'),
+                        Total_Net_PnL=('Net_PnL', 'sum'),
+                        Wins=('Net_PnL', lambda x: (x > 0).sum())
+                    ).reset_index()
+                    
+                    decay_stats['Win_Rate'] = (decay_stats['Wins'] / decay_stats['Trade_Count']) * 100
+                    decay_stats['EV'] = decay_stats['Total_Net_PnL'] / decay_stats['Trade_Count']
+                    decay_stats = decay_stats.sort_values('Hold_Category')
+                    
+                    # Highlight the "Sweet Spot" and "Danger Zone" based on Expected Value (EV)
+                    valid_ev = decay_stats[decay_stats['Trade_Count'] >= 5] # Require at least 5 trades to avoid outliers
+                    if not valid_ev.empty:
+                        best_cat = valid_ev.loc[valid_ev['EV'].idxmax(), 'Hold_Category']
+                        worst_cat = valid_ev.loc[valid_ev['EV'].idxmin(), 'Hold_Category']
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        col_d1, col_d2, col_d3 = st.columns(3)
+                        
+                        best_ev_val = valid_ev['EV'].max()
+                        col_d1.metric(f"Sweet Spot: {best_cat[3:]}", f"${best_ev_val:.2f} EV", help="Your most mathematically profitable hold time window per trade.")
+                        
+                        worst_ev_val = valid_ev['EV'].min()
+                        col_d2.metric(f"Danger Zone: {worst_cat[3:]}", f"${worst_ev_val:.2f} EV", help="The hold time window that bleeds the most capital per trade.")
+                        
+                        avg_hold = decay_df['Hold_Mins'].mean()
+                        col_d3.metric("Overall Avg Hold Time", f"{avg_hold:.1f} Mins", delta_color="off")
+                    
+                    st.markdown("---")
+                    
+                    fig_dec = go.Figure()
+                    
+                    # Net P&L Bar (Primary Y-Axis)
+                    fig_dec.add_trace(go.Bar(
+                        x=decay_stats['Hold_Category'],
+                        y=decay_stats['Total_Net_PnL'],
+                        name='Total Net P&L',
+                        marker_color=['#26a69a' if val >= 0 else '#ef5350' for val in decay_stats['Total_Net_PnL']],
+                        yaxis='y1'
+                    ))
+                    
+                    # Win Rate Line (Secondary Y-Axis)
+                    fig_dec.add_trace(go.Scatter(
+                        x=decay_stats['Hold_Category'],
+                        y=decay_stats['Win_Rate'],
+                        name='Win Rate %',
+                        mode='lines+markers',
+                        line=dict(color='#FFD700', width=3),
+                        marker=dict(size=10, color='#FFD700', line=dict(width=1, color='DarkSlateGrey')),
+                        yaxis='y2'
+                    ))
+                    
+                    fig_dec.update_layout(
+                        title="Performance Decay Over Time",
+                        height=400,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        xaxis=dict(title='Hold Time Category', gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis=dict(title='Total Net P&L ($)', tickprefix="$", gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis2=dict(title='Win Rate (%)', overlaying='y', side='right', range=[0, 105], showgrid=False),
+                        hovermode='x unified',
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_dec, use_container_width=True)
+                else:
+                    st.info("Not enough duration data to plot the Decay Curve.")
+            # -----------------------------------------------------
+
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("16. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("17. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
