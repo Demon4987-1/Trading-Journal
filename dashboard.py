@@ -1135,8 +1135,116 @@ else:
                 st.info("Not enough sequential data to calculate Tilt Velocity. Keep logging trades!")
                 
             st.markdown("---")
-            st.subheader("8. Monte Carlo Equity Simulator (Risk of Ruin)")
-            st.markdown("This engine runs thousands of parallel universe simulations of your next series of trades by randomly sampling your actual historical execution data.")
+            # --- NEW UI: The Scaling Alpha Engine ---
+            st.markdown("---")
+            st.subheader("8. Scaling Alpha Engine (Efficiency Check)")
+            st.markdown("Compares your actual P&L from **overlapping scale-ins** against a simulated baseline: *What if you entered your total position size at your first entry price, and exited everything at your final exit price?*")
+
+            POINT_VALUES = {
+                'ES': 50, 'MES': 5, 'NQ': 20, 'MNQ': 2, 'RTY': 50, 'M2K': 5,
+                'CL': 1000, 'MCL': 100, 'QM': 500, 'QG': 12.5, 'NG': 10000, 
+                'GC': 100, 'MGC': 10, 'YM': 5, 'MYM': 0.5
+            }
+            
+            # --- NEW UI: Localized Scaling Filters ---
+            alpha_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+            selected_alpha_inst = st.multiselect("Filter Scaling Alpha by Instrument (leave blank to chart all):", alpha_instruments, key="alpha_inst_filter")
+            
+            alpha_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+            selected_alpha_dates = st.multiselect("Filter Scaling Alpha by Trading Day (leave blank to chart all):", alpha_dates, key="alpha_date_filter")
+            # ----------------------------------------
+
+            alpha_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
+            
+            if selected_alpha_inst:
+                alpha_df = alpha_df[alpha_df['Instrument'].isin(selected_alpha_inst)]
+            if selected_alpha_dates:
+                alpha_df = alpha_df[alpha_df['Date_str'].isin(selected_alpha_dates)]
+            
+            # --- STRICT OVERLAP MATH ---
+            # Convert exit times to datetime for overlap comparison
+            alpha_df['Entry_DT'] = pd.to_datetime(alpha_df['Entry_Time'], errors='coerce')
+            alpha_df['Exit_DT'] = pd.to_datetime(alpha_df['Exit_Time'], errors='coerce')
+            
+            # Calculate the furthest exit time seen so far for a given day/instrument/direction
+            alpha_df['Max_Exit_So_Far'] = alpha_df.groupby(['Date_str', 'Instrument', 'trade_type'])['Exit_DT'].cummax().shift(1)
+            
+            # A new campaign starts ONLY if the current entry is AFTER the previous maximum exit
+            # (meaning no overlap), or if the instrument/direction/day changes.
+            condition = (alpha_df['Entry_DT'] > alpha_df['Max_Exit_So_Far']) | \
+                        (alpha_df['Instrument'] != alpha_df['Instrument'].shift(1)) | \
+                        (alpha_df['trade_type'] != alpha_df['trade_type'].shift(1)) | \
+                        (alpha_df['Date_str'] != alpha_df['Date_str'].shift(1))
+                        
+            alpha_df['Campaign_ID'] = condition.cumsum()
+            
+            campaigns = []
+            
+            for c_id, group in alpha_df.groupby('Campaign_ID'):
+                if len(group) > 1: # We ONLY evaluate true overlapping scale-ins
+                    actual_net = group['Net_PnL'].sum()
+                    true_position_size = group['Qty'].max() 
+                    base_comm = group['Commission'].sum()
+                    
+                    entries = group.sort_values('Entry_DT')
+                    first_entry = entries.iloc[0]['Entry_Price']
+                    final_exit = group.iloc[-1]['Exit_Price']
+                    instrument = group.iloc[0]['Instrument']
+                    t_type = group.iloc[0]['trade_type'].upper()
+                    
+                    # --- NEW MATH: Detect Averaging Down vs Pyramiding ---
+                    behavior = "Scale-Out Only"
+                    if len(entries['Entry_Time'].unique()) > 1: # They added size later
+                        if t_type == 'LONG':
+                            if (entries.iloc[1:]['Entry_Price'] < first_entry).any(): behavior = "Averaging Down"
+                            else: behavior = "Pyramiding"
+                        elif t_type == 'SHORT':
+                            if (entries.iloc[1:]['Entry_Price'] > first_entry).any(): behavior = "Averaging Down"
+                            else: behavior = "Pyramiding"
+                    # -----------------------------------------------------
+
+                    multiplier = 1.0
+                    for k in sorted(POINT_VALUES.keys(), key=len, reverse=True):
+                        if instrument.startswith(k):
+                            multiplier = POINT_VALUES[k]
+                            break
+                            
+                    base_pt_diff = (final_exit - first_entry) if t_type == 'LONG' else (first_entry - final_exit)
+                    base_gross = base_pt_diff * true_position_size * multiplier
+                    base_net = base_gross - base_comm
+                    
+                    campaigns.append({
+                        'Campaign': f"{instrument} ({t_type}) @ {group.iloc[0]['Datetime'].strftime('%H:%M')} ({len(group)} legs)",
+                        'Actual Net': actual_net,
+                        'Baseline Net': base_net,
+                        'Scaling Alpha': actual_net - base_net,
+                        'Behavior': behavior
+                    })
+                        
+            if campaigns:
+                camp_df = pd.DataFrame(campaigns)
+                total_alpha = camp_df['Scaling Alpha'].sum()
+                avg_down_alpha = camp_df[camp_df['Behavior'] == 'Averaging Down']['Scaling Alpha'].sum()
+                pyr_alpha = camp_df[camp_df['Behavior'] == 'Pyramiding']['Scaling Alpha'].sum()
+                scale_out_alpha = camp_df[camp_df['Behavior'] == 'Scale-Out Only']['Scaling Alpha'].sum()
+                
+                col_a1, col_a2, col_a3, col_a4 = st.columns(4)
+                col_a1.metric("Total Scaling Alpha", f"${total_alpha:.2f}")
+                col_a2.metric("Alpha (Averaging Down)", f"${avg_down_alpha:.2f}", help="Money made/lost specifically when you added to losing positions.")
+                col_a3.metric("Alpha (Pyramiding)", f"${pyr_alpha:.2f}", help="Money made/lost specifically when you added to winning positions.")
+                col_a4.metric("Alpha (Scale-Out Only)", f"${scale_out_alpha:.2f}", help="Money made/lost when you entered full size and scaled out.")
+                
+                camp_df = camp_df.sort_values(by='Scaling Alpha').head(20) 
+                
+                fig_alpha = go.Figure()
+                fig_alpha.add_trace(go.Bar(x=camp_df['Campaign'], y=camp_df['Actual Net'], name='Actual Scaled P&L', marker_color='#26a69a'))
+                fig_alpha.add_trace(go.Bar(x=camp_df['Campaign'], y=camp_df['Baseline Net'], name='Baseline (1-Shot) P&L', marker_color='rgba(128,128,128,0.4)'))
+                
+                fig_alpha.update_layout(barmode='group', height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis=dict(tickprefix="$"))
+                st.plotly_chart(fig_alpha, use_container_width=True)
+            else:
+                st.info("Not enough scaled positions (multiple executions overlapping in time) to calculate Scaling Alpha.")
+            # ----------------------------------------
             
             if st.toggle("🧪 Run Monte Carlo Simulator", key="run_mc"):
                 mc_df = master_df.dropna(subset=['Net_PnL'])
