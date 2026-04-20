@@ -1245,6 +1245,77 @@ else:
             else:
                 st.info("Not enough scaled positions (multiple executions overlapping in time) to calculate Scaling Alpha.")
             # ----------------------------------------
+
+            # --- NEW UI: The Conviction Curve (Size-Induced Panic) ---
+            st.markdown("---")
+            st.subheader("9. The Conviction Curve (Size-Induced Panic)")
+            st.markdown("Plots your Average Exit Efficiency (MFE Capture Rate) against your Position Size. A steep drop-off exposes your psychological volume ceiling.")
+            
+            if st.toggle("📉 Run Conviction Curve Analysis", key="run_conviction"):
+                # --- NEW UI: Localized Conviction Filters ---
+                conv_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_conv_inst = st.multiselect("Filter Conviction Curve by Instrument (leave blank to chart all):", conv_instruments, key="conv_inst_filter")
+                
+                conv_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_conv_dates = st.multiselect("Filter Conviction Curve by Trading Day (leave blank to chart all):", conv_dates, key="conv_date_filter")
+                # --------------------------------------------
+
+                cc_df = master_df.dropna(subset=['Net_PnL', 'Qty']).copy()
+                
+                if selected_conv_inst:
+                    cc_df = cc_df[cc_df['Instrument'].isin(selected_conv_inst)]
+                if selected_conv_dates:
+                    cc_df = cc_df[cc_df['Date_str'].isin(selected_conv_dates)]
+                    
+                total_trades = len(cc_df)
+                conviction_data = []
+                
+                if total_trades > 0:
+                    my_bar = st.progress(0, text="Crunching MFE data for all historical trades...")
+                    
+                    for idx, (i, row) in enumerate(cc_df.iterrows()):
+                        if idx % 10 == 0:  # Update progress bar every 10 trades
+                            my_bar.progress(min(idx / total_trades, 1.0), text=f"Analyzing trade {idx} of {total_trades}...")
+                            
+                        mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
+                        
+                        if mfe != "N/A" and float(mfe) > 0:
+                            t_type = row.get('trade_type', 'Unknown').upper()
+                            captured_pts = (row['Exit_Price'] - row['Entry_Price']) if t_type == 'LONG' else (row['Entry_Price'] - row['Exit_Price'])
+                            eff = min((captured_pts / float(mfe)) * 100, 100.0) if captured_pts > 0 else 0.0
+                            conviction_data.append({'Qty': row['Qty'], 'Efficiency': eff})
+                    
+                    my_bar.empty() # Hide progress bar when finished
+                    
+                    if conviction_data:
+                        conv_df = pd.DataFrame(conviction_data)
+                        grouped_conv = conv_df.groupby('Qty').agg(
+                            Avg_Efficiency=('Efficiency', 'mean'),
+                            Trade_Count=('Efficiency', 'count')
+                        ).reset_index().sort_values('Qty')
+                        
+                        fig_conv = go.Figure()
+                        fig_conv.add_trace(go.Bar(
+                            x=grouped_conv['Qty'], 
+                            y=grouped_conv['Avg_Efficiency'],
+                            text=grouped_conv['Trade_Count'].apply(lambda x: f"n={x}"),
+                            textposition='auto',
+                            marker_color=['#26a69a' if val >= 50 else '#ef5350' for val in grouped_conv['Avg_Efficiency']],
+                            name='Avg Efficiency %'
+                        ))
+                        
+                        fig_conv.update_layout(
+                            height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', 
+                            xaxis=dict(title='Position Size (Contracts/Shares)', type='category'), 
+                            yaxis=dict(title='Average MFE Capture Rate (%)', range=[0, 100])
+                        )
+                        st.plotly_chart(fig_conv, use_container_width=True)
+                    else:
+                        st.info("Not enough market data available to calculate MFE efficiencies.")
+            # ---------------------------------------------------------
+
+            st.markdown("---")
+            st.subheader("10. Monte Carlo Equity Simulator (Risk of Ruin)")
             
             if st.toggle("🧪 Run Monte Carlo Simulator", key="run_mc"):
                 mc_df = master_df.dropna(subset=['Net_PnL'])
@@ -1288,10 +1359,142 @@ else:
                         st.plotly_chart(fig_mc, use_container_width=True)
                 else:
                     st.info("Log at least 10 valid trades to unlock the Monte Carlo Simulator.")
+                    
+            # --- NEW UI: The Drawdown Behavior Matrix ---
+            st.markdown("---")
+            st.subheader("11. The Drawdown Behavior Matrix (In-the-Hole Analytics)")
+            st.markdown("Analyzes your position sizing and hold times specifically when your daily P&L is in the red. Exposes desperation, revenge trading, and Martingale sizing.")
+            
+            if st.toggle("🚨 Run Drawdown Behavior Analysis", key="run_drawdown"):
+                # --- NEW UI: Localized Drawdown Filters ---
+                dd_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_dd_inst = st.multiselect("Filter Drawdown Matrix by Instrument (leave blank to chart all):", dd_instruments, key="dd_inst_filter")
                 
+                dd_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_dd_dates = st.multiselect("Filter Drawdown Matrix by Trading Day (leave blank to chart all):", dd_dates, key="dd_date_filter")
+                # ------------------------------------------
+
+                dd_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
+                
+                # Accurately calculate the exact Daily P&L state BEFORE each trade was taken
+                dd_df['Daily_Cum_PnL'] = dd_df.groupby('Date_str')['Net_PnL'].cumsum()
+                dd_df['PnL_So_Far'] = dd_df.groupby('Date_str')['Daily_Cum_PnL'].shift(1).fillna(0.0)
+                dd_df['Hold_Secs'] = dd_df['Duration'].apply(parse_duration_to_seconds)
+                
+                # Apply filters AFTER calculating the PnL state to ensure the math stays true to the timeline
+                if selected_dd_inst:
+                    dd_df = dd_df[dd_df['Instrument'].isin(selected_dd_inst)]
+                if selected_dd_dates:
+                    dd_df = dd_df[dd_df['Date_str'].isin(selected_dd_dates)]
+                    
+                if len(dd_df) > 0:
+                    red_trades = dd_df[dd_df['PnL_So_Far'] < 0]
+                    green_trades = dd_df[dd_df['PnL_So_Far'] >= 0]
+                    
+                    avg_qty_red = red_trades['Qty'].mean() if len(red_trades) > 0 else 0
+                    avg_qty_green = green_trades['Qty'].mean() if len(green_trades) > 0 else 0
+                    
+                    avg_hold_red = red_trades['Hold_Secs'].mean() if len(red_trades) > 0 else 0
+                    avg_hold_green = green_trades['Hold_Secs'].mean() if len(green_trades) > 0 else 0
+                    
+                    wr_red = (len(red_trades[red_trades['Net_PnL'] > 0]) / len(red_trades) * 100) if len(red_trades) > 0 else 0
+                    wr_green = (len(green_trades[green_trades['Net_PnL'] > 0]) / len(green_trades) * 100) if len(green_trades) > 0 else 0
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    col_dd1, col_dd2, col_dd3 = st.columns(3)
+                    col_dd1.metric("Avg Position Size (In the Green)", f"{avg_qty_green:.1f} contracts", f"vs {avg_qty_red:.1f} (In Red)", delta_color="off")
+                    col_dd2.metric("Avg Hold Time (In the Green)", f"{format_seconds_to_duration(avg_hold_green)}", f"vs {format_seconds_to_duration(avg_hold_red)} (In Red)", delta_color="off")
+                    col_dd3.metric("Win Rate (In the Green)", f"{wr_green:.1f}%", f"vs {wr_red:.1f}% (In Red)", delta_color="off")
+                    
+                    st.markdown("---")
+                    fig_dd = go.Figure()
+                    
+                    wins = dd_df[dd_df['Net_PnL'] > 0]
+                    losses = dd_df[dd_df['Net_PnL'] <= 0]
+                    
+                    fig_dd.add_trace(go.Scatter(x=wins['PnL_So_Far'], y=wins['Qty'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=wins['Date_str'] + " | " + wins['Instrument']))
+                    fig_dd.add_trace(go.Scatter(x=losses['PnL_So_Far'], y=losses['Qty'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=losses['Date_str'] + " | " + losses['Instrument']))
+                    
+                    # Draw the $0 Breakeven Line
+                    fig_dd.add_vline(x=0, line_width=2, line_dash="dash", line_color="rgba(255,255,255,0.5)")
+                    fig_dd.add_annotation(x=0, y=dd_df['Qty'].max(), text="Daily Breakeven ($0)", showarrow=False, yshift=15, font=dict(color="rgba(255,255,255,0.7)"))
+                    
+                    fig_dd.update_layout(height=450, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Daily P&L Before Trade Was Taken ($)', tickprefix="$", gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Position Size Executed (Qty)', gridcolor='rgba(128, 128, 128, 0.2)'))
+                    
+                    st.plotly_chart(fig_dd, use_container_width=True)
+                else:
+                    st.info("Not enough data to calculate drawdown behavior metrics.")
+            # --------------------------------------------------------
+
+            # --- NEW UI: The Chrono-Matrix (2D Time/Day Heatmap) ---
+            st.markdown("---")
+            st.subheader("12. The Chrono-Matrix (2D Time/Day Heatmap)")
+            st.markdown("A visual grid plotting the days of the week against 15-minute time blocks, color-coded by your Net P&L. Mathematically proves your most profitable hours.")
+            
+            if st.toggle("⏳ Run Chrono-Matrix Analysis", key="run_chrono"):
+                
+                # --- NEW UI: Localized Chrono Filters ---
+                chrono_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_chrono_inst = st.multiselect("Filter Chrono-Matrix by Instrument (leave blank to chart all):", chrono_instruments, key="chrono_inst_filter")
+                
+                chrono_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_chrono_dates = st.multiselect("Filter Chrono-Matrix by Trading Day (leave blank to chart all):", chrono_dates, key="chrono_date_filter")
+                # ----------------------------------------
+                
+                chrono_df = master_df.copy()
+                
+                if selected_chrono_inst:
+                    chrono_df = chrono_df[chrono_df['Instrument'].isin(selected_chrono_inst)]
+                if selected_chrono_dates:
+                    chrono_df = chrono_df[chrono_df['Date_str'].isin(selected_chrono_dates)]
+                    
+                if not chrono_df.empty:
+                    # Extract the Day of Week and the 15-minute Time Block
+                    chrono_df['Day_Name'] = chrono_df['Datetime'].dt.day_name()
+                    chrono_df['Time_15m'] = chrono_df['Datetime'].dt.floor('15min').dt.time
+                    
+                    # Group the data to find the total Net P&L for each specific grid square
+                    pivot_df = chrono_df.groupby(['Day_Name', 'Time_15m'])['Net_PnL'].sum().reset_index()
+                    
+                    # Pivot the data into a 2D matrix shape for the heatmap
+                    heatmap_data = pivot_df.pivot(index='Day_Name', columns='Time_15m', values='Net_PnL').fillna(0)
+                    
+                    # Force the Y-Axis to be strictly chronological (Monday -> Friday)
+                    days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+                    available_days = [d for d in days_order if d in heatmap_data.index]
+                    heatmap_data = heatmap_data.reindex(available_days)
+                    
+                    # Format the X-Axis column headers to clean strings
+                    heatmap_data.columns = [t.strftime('%H:%M') for t in heatmap_data.columns]
+                    
+                    # Generate the Custom Plotly Heatmap
+                    fig_chrono = go.Figure(data=go.Heatmap(
+                        z=heatmap_data.values,
+                        x=heatmap_data.columns,
+                        y=heatmap_data.index,
+                        # Custom Red-to-Green gradient centering exactly at $0
+                        colorscale=[[0, '#ef5350'], [0.5, 'rgba(0,0,0,0)'], [1, '#26a69a']],
+                        zmid=0,
+                        hoverongaps=False,
+                        hovertemplate='<b>Day:</b> %{y}<br><b>Time:</b> %{x}<br><b>Net P&L:</b> $%{z:.2f}<extra></extra>'
+                    ))
+                    
+                    fig_chrono.update_layout(
+                        height=400,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        xaxis=dict(title='Time of Day (15-Minute Blocks)', tickangle=-45, gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis=dict(title='Day of the Week', autorange='reversed', gridcolor='rgba(128, 128, 128, 0.1)')
+                    )
+                    
+                    st.plotly_chart(fig_chrono, use_container_width=True)
+                else:
+                    st.info("Not enough data to generate the Chrono-Matrix.")
+            # -------------------------------------------------------
+
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("9. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("13. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
