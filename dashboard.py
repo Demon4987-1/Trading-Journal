@@ -1492,9 +1492,191 @@ else:
                     st.info("Not enough data to generate the Chrono-Matrix.")
             # -------------------------------------------------------
 
+            # --- NEW UI: The Overtrading Threshold (Fatigue Matrix) ---
+            st.markdown("---")
+            st.subheader("13. The Overtrading Threshold (Fatigue Matrix)")
+            st.markdown("Sequences your daily executions (Trade #1, Trade #2...) to calculate your Win Rate and profitability for each specific slot. Mathematically pinpoints exactly when decision fatigue sets in.")
+            
+            if st.toggle("🔋 Run Fatigue Matrix Analysis", key="run_fatigue"):
+                
+                # --- NEW UI: Localized Fatigue Filters ---
+                fatigue_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_fatigue_inst = st.multiselect("Filter Fatigue Matrix by Instrument (leave blank to chart all):", fatigue_instruments, key="fatigue_inst_filter")
+                
+                fatigue_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_fatigue_dates = st.multiselect("Filter Fatigue Matrix by Trading Day (leave blank to chart all):", fatigue_dates, key="fatigue_date_filter")
+                # -----------------------------------------
+                
+                fatigue_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
+                
+                if selected_fatigue_inst:
+                    fatigue_df = fatigue_df[fatigue_df['Instrument'].isin(selected_fatigue_inst)]
+                if selected_fatigue_dates:
+                    fatigue_df = fatigue_df[fatigue_df['Date_str'].isin(selected_fatigue_dates)]
+                    
+                if not fatigue_df.empty:
+                    # Isolate the daily execution sequence (1st trade, 2nd trade, etc.)
+                    fatigue_df['Daily_Trade_Number'] = fatigue_df.groupby('Date_str').cumcount() + 1
+                    
+                    # Aggregate P&L and Win Rate by Execution Number
+                    fatigue_stats = fatigue_df.groupby('Daily_Trade_Number').agg(
+                        Total_Net_PnL=('Net_PnL', 'sum'),
+                        Trade_Count=('Net_PnL', 'count'),
+                        Wins=('Net_PnL', lambda x: (x > 0).sum())
+                    ).reset_index()
+                    
+                    fatigue_stats['Win_Rate'] = (fatigue_stats['Wins'] / fatigue_stats['Trade_Count']) * 100
+                    
+                    fig_fatigue = go.Figure()
+                    
+                    # Bar Chart for Net P&L (Primary Y-Axis)
+                    fig_fatigue.add_trace(go.Bar(
+                        x=fatigue_stats['Daily_Trade_Number'], 
+                        y=fatigue_stats['Total_Net_PnL'], 
+                        name='Total Net P&L',
+                        marker_color=['#26a69a' if val >= 0 else '#ef5350' for val in fatigue_stats['Total_Net_PnL']],
+                        yaxis='y1'
+                    ))
+                    
+                    # Line Chart for Win Rate (Secondary Y-Axis)
+                    fig_fatigue.add_trace(go.Scatter(
+                        x=fatigue_stats['Daily_Trade_Number'], 
+                        y=fatigue_stats['Win_Rate'], 
+                        name='Win Rate %',
+                        mode='lines+markers',
+                        line=dict(color='#FFD700', width=3),
+                        marker=dict(size=8, color='#FFD700', line=dict(width=1, color='DarkSlateGrey')),
+                        yaxis='y2'
+                    ))
+                    
+                    fig_fatigue.update_layout(
+                        height=450,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        xaxis=dict(title='Daily Execution Sequence (Trade #)', tickmode='linear', gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis=dict(title='Total Net P&L ($)', tickprefix="$", gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis2=dict(title='Win Rate (%)', overlaying='y', side='right', range=[0, 105], showgrid=False),
+                        hovermode='x unified',
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_fatigue, use_container_width=True)
+                    
+                    # Generate a quick insight string
+                    best_trade_num = fatigue_stats.loc[fatigue_stats['Total_Net_PnL'].idxmax(), 'Daily_Trade_Number']
+                    worst_trade_num = fatigue_stats.loc[fatigue_stats['Total_Net_PnL'].idxmin(), 'Daily_Trade_Number']
+                    
+                    st.markdown(f"**Quick Insight:** Your peak profitability usually occurs on **Trade #{best_trade_num}** of the day. The math shows your decision-making hits rock bottom around **Trade #{worst_trade_num}**.")
+                    
+                else:
+                    st.info("Not enough data to calculate Overtrading Threshold.")
+            # -------------------------------------------------------
+
+            # --- NEW UI: The Scratch Autopsy ---
+            st.markdown("---")
+            st.subheader("14. The \"Scratch\" Autopsy (Opportunity Cost of Anxiety)")
+            st.markdown("Isolates your breakeven/scratch trades and calculates their Maximum Favorable (MFE) and Adverse (MAE) Excursions. Proves mathematically if your early exits are saving you from deep losses or choking out massive winners.")
+            
+            if st.toggle("🔍 Run Scratch Autopsy", key="run_scratch"):
+                
+                col_filt1, col_filt2 = st.columns(2)
+                with col_filt1:
+                    scratch_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                    selected_scratch_inst = st.multiselect("Filter Autopsy by Instrument:", scratch_instruments, key="scratch_inst_filter")
+                with col_filt2:
+                    scratch_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                    selected_scratch_dates = st.multiselect("Filter Autopsy by Trading Day:", scratch_dates, key="scratch_date_filter")
+                
+                # Dynamic threshold so you can define what a "Scratch" is based on the instrument
+                scratch_limit = st.slider("Define a 'Scratch' Trade ($ PnL Limit)", min_value=1.0, max_value=100.0, value=15.0, step=1.0, help="Trades with a Net P&L between negative and positive this amount will be isolated for autopsy.")
+                
+                sa_df = master_df.dropna(subset=['Net_PnL', 'Qty']).copy()
+                
+                if selected_scratch_inst:
+                    sa_df = sa_df[sa_df['Instrument'].isin(selected_scratch_inst)]
+                if selected_scratch_dates:
+                    sa_df = sa_df[sa_df['Date_str'].isin(selected_scratch_dates)]
+                    
+                # Isolate only the trades that ended near $0
+                scratch_trades = sa_df[(sa_df['Net_PnL'] >= -scratch_limit) & (sa_df['Net_PnL'] <= scratch_limit)].copy()
+                
+                POINT_VALUES = {
+                    'ES': 50, 'MES': 5, 'NQ': 20, 'MNQ': 2, 'RTY': 50, 'M2K': 5,
+                    'CL': 1000, 'MCL': 100, 'QM': 500, 'QG': 12.5, 'NG': 10000, 
+                    'GC': 100, 'MGC': 10, 'YM': 5, 'MYM': 0.5
+                }
+                
+                if len(scratch_trades) > 0:
+                    my_bar = st.progress(0, text="Calculating Missed Excursions for scratched trades...")
+                    autopsy_data = []
+                    total_scratches = len(scratch_trades)
+                    
+                    for idx, (i, row) in enumerate(scratch_trades.iterrows()):
+                        if idx % 5 == 0:
+                            my_bar.progress(min(idx / total_scratches, 1.0), text=f"Autopsy in progress: Trade {idx} of {total_scratches}...")
+                            
+                        mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
+                        
+                        if mfe != "N/A" and mae != "N/A":
+                            instrument = row['Instrument']
+                            multiplier = 1.0
+                            for k in sorted(POINT_VALUES.keys(), key=len, reverse=True):
+                                if instrument.startswith(k):
+                                    multiplier = POINT_VALUES[k]
+                                    break
+                                    
+                            mfe_dollar = float(mfe) * row['Qty'] * multiplier
+                            mae_dollar = float(mae) * row['Qty'] * multiplier
+                            
+                            autopsy_data.append({
+                                'Date': row['Date_str'],
+                                'Instrument': instrument,
+                                'Actual_PnL': row['Net_PnL'],
+                                'Missed_Upside': mfe_dollar,
+                                'Saved_Drawdown': mae_dollar
+                            })
+                    
+                    my_bar.empty()
+                    
+                    if autopsy_data:
+                        ad_df = pd.DataFrame(autopsy_data)
+                        
+                        total_upside = ad_df['Missed_Upside'].sum()
+                        total_drawdown = ad_df['Saved_Drawdown'].sum()
+                        avg_upside = ad_df['Missed_Upside'].mean()
+                        avg_drawdown = ad_df['Saved_Drawdown'].mean()
+                        
+                        col_sa1, col_sa2, col_sa3 = st.columns(3)
+                        col_sa1.metric(f"Total Scratched Trades", f"{len(ad_df)}")
+                        col_sa2.metric("Avg Missed Upside (MFE) per Scratch", f"${avg_upside:.2f}", help="The average amount of profit the trade offered before you scratched it.")
+                        col_sa3.metric("Avg Heat Avoided (MAE) per Scratch", f"${avg_drawdown:.2f}", help="The average amount of heat you took before scratching.", delta_color="inverse")
+                        
+                        st.markdown("---")
+                        
+                        fig_sa = go.Figure()
+                        fig_sa.add_trace(go.Bar(name='Missed Upside (Money Left on Table)', x=ad_df.index, y=ad_df['Missed_Upside'], marker_color='#26a69a'))
+                        fig_sa.add_trace(go.Bar(name='Heat Avoided (Drawdown Saved)', x=ad_df.index, y=-ad_df['Saved_Drawdown'], marker_color='#ef5350'))
+                        
+                        fig_sa.update_layout(
+                            title='Excursion Profile of Your Scratched Trades',
+                            barmode='group',
+                            height=400, 
+                            plot_bgcolor='rgba(0,0,0,0)', 
+                            paper_bgcolor='rgba(0,0,0,0)', 
+                            xaxis=dict(title='Scratched Trade Instance', showticklabels=False),
+                            yaxis=dict(title='Dollar Amount ($)', tickprefix="$", gridcolor='rgba(128, 128, 128, 0.1)'),
+                            hovermode='x unified'
+                        )
+                        st.plotly_chart(fig_sa, use_container_width=True)
+                        
+                        st.info(f"**Diagnosis:** By scratching these trades, you left a total of **${total_upside:.2f}** on the table, while saving yourself from **${total_drawdown:.2f}** in potential heat. If the green bar massively outweighs the red, your anxiety is causing you to abandon valid setups prematurely.")
+                else:
+                    st.info("No scratch trades found within the specified threshold and filters.")
+            # -----------------------------------------------
+
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("13. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("15. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
