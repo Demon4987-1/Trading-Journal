@@ -1897,9 +1897,111 @@ else:
                     st.info("Not enough duration data to plot the Decay Curve.")
             # -----------------------------------------------------
 
+            # --- NEW UI: The Euphoria Tax ---
+            st.markdown("---")
+            st.subheader("17. The \"Euphoria Tax\" (Post-Streak Analytics)")
+            st.markdown("Analyzes the very next trade you take immediately after a 3+ win streak or a massive outlier profit. Proves mathematically if overconfidence destroys your discipline.")
+            
+            if st.toggle("🔥 Run Euphoria Tax Analysis", key="run_euphoria"):
+                
+                # --- NEW UI: Localized Filters ---
+                col_eu1, col_eu2 = st.columns(2)
+                with col_eu1:
+                    eu_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                    selected_eu_inst = st.multiselect("Filter Euphoria by Instrument:", eu_instruments, key="eu_inst_filter")
+                with col_eu2:
+                    eu_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                    selected_eu_dates = st.multiselect("Filter Euphoria by Trading Day:", eu_dates, key="eu_date_filter")
+                # ---------------------------------
+                
+                eu_df = master_df.dropna(subset=['Net_PnL', 'Qty']).copy().sort_values(by='Datetime').reset_index(drop=True)
+                
+                if selected_eu_inst:
+                    eu_df = eu_df[eu_df['Instrument'].isin(selected_eu_inst)]
+                if selected_eu_dates:
+                    eu_df = eu_df[eu_df['Date_str'].isin(selected_eu_dates)]
+                
+                if len(eu_df) > 10:
+                    # 1. Identify Wins
+                    eu_df['Is_Win'] = eu_df['Net_PnL'] > 0
+                    
+                    # 2. Vectorized 3-Win Streak Calculation
+                    eu_df['Win_Streak'] = eu_df['Is_Win'].groupby((~eu_df['Is_Win']).cumsum()).cumsum()
+                    
+                    # 3. Find the Top 10% "Massive Winner" Threshold
+                    winning_trades = eu_df[eu_df['Is_Win']]
+                    if len(winning_trades) > 5:
+                        top_10_threshold = winning_trades['Net_PnL'].quantile(0.90)
+                    else:
+                        top_10_threshold = float('inf')
+                        
+                    # 4. Define the "Euphoric State" (Just hit 3 wins OR just bagged a massive outlier profit)
+                    eu_df['In_Euphoria'] = (eu_df['Win_Streak'] >= 3) | ((eu_df['Net_PnL'] >= top_10_threshold) & eu_df['Is_Win'])
+                    
+                    # 5. Shift by 1 to isolate the VERY NEXT trade taken while in this state
+                    # .astype(bool) forces strict True/False, preventing bitwise math errors
+                    eu_df['Post_Euphoria_Trade'] = eu_df['In_Euphoria'].shift(1).fillna(False).astype(bool)
+                    
+                    # 6. Split the database using explicit boolean checks rather than the ~ operator
+                    euphoric_trades = eu_df[eu_df['Post_Euphoria_Trade'] == True]
+                    baseline_trades = eu_df[eu_df['Post_Euphoria_Trade'] == False]
+                    
+                    if len(euphoric_trades) > 0:
+                        # Metrics Calculation
+                        base_wr = (baseline_trades['Is_Win'].sum() / len(baseline_trades) * 100) if len(baseline_trades) > 0 else 0
+                        eu_wr = (euphoric_trades['Is_Win'].sum() / len(euphoric_trades) * 100)
+                        
+                        base_qty = baseline_trades['Qty'].mean() if len(baseline_trades) > 0 else 0
+                        eu_qty = euphoric_trades['Qty'].mean()
+                        
+                        base_pnl = baseline_trades['Net_PnL'].mean() if len(baseline_trades) > 0 else 0
+                        eu_pnl = euphoric_trades['Net_PnL'].mean()
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        col_e1, col_e2, col_e3 = st.columns(3)
+                        
+                        # Use inverse delta colors for Qty (higher qty post-euphoria is usually bad)
+                        col_e1.metric("Win Rate (Post-Euphoria)", f"{eu_wr:.1f}%", f"vs {base_wr:.1f}% (Baseline)", delta_color="off")
+                        col_e2.metric("Avg Position Size (Post-Euphoria)", f"{eu_qty:.1f} lots", f"vs {base_qty:.1f} (Baseline)", delta_color="inverse")
+                        col_e3.metric("Avg P&L (Post-Euphoria)", f"${eu_pnl:.2f}", f"vs ${base_pnl:.2f} (Baseline)", delta_color="normal")
+                        
+                        st.markdown("---")
+                        
+                        # Plotly Comparison Chart
+                        fig_eu = go.Figure()
+                        
+                        categories = ['Win Rate (%)', 'Avg Position Size (Qty)', 'Avg P&L per Trade ($)']
+                        base_values = [base_wr, base_qty, base_pnl]
+                        eu_values = [eu_wr, eu_qty, eu_pnl]
+                        
+                        fig_eu.add_trace(go.Bar(name='Baseline (Normal State)', x=categories, y=base_values, marker_color='rgba(128,128,128,0.5)'))
+                        fig_eu.add_trace(go.Bar(name='Post-Euphoria (Overconfident State)', x=categories, y=eu_values, marker_color='#ef5350'))
+                        
+                        fig_eu.update_layout(
+                            title="The Cost of Overconfidence: Baseline vs Euphoric Trades",
+                            barmode='group',
+                            height=400,
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            yaxis=dict(gridcolor='rgba(128, 128, 128, 0.1)'),
+                            hovermode='x unified'
+                        )
+                        st.plotly_chart(fig_eu, use_container_width=True)
+                        
+                        total_tax = euphoric_trades['Net_PnL'].sum()
+                        if total_tax < 0:
+                            st.error(f"**Diagnosis:** Your 'Euphoria Tax' is currently costing you **${abs(total_tax):.2f}**. After a big win or a hot streak, your discipline degrades.")
+                        else:
+                            st.success(f"**Diagnosis:** You are successfully maintaining discipline after big wins! Your post-euphoria trades have netted **${total_tax:.2f}**.")
+                    else:
+                        st.info("No trades found immediately following a euphoric state (3+ win streak or top 10% outlier profit) with the current filters.")
+                else:
+                    st.info("Not enough data to run the Euphoria Tax engine.")
+            # -----------------------------------------------------
+
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("17. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("18. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
