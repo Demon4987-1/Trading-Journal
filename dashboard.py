@@ -1999,9 +1999,150 @@ else:
                     st.info("Not enough data to run the Euphoria Tax engine.")
             # -----------------------------------------------------
 
+            # --- NEW UI: The Objective Trade Grader ---
+            st.markdown("---")
+            st.subheader("18. The Objective Trade Grader (A+ Setup Gatekeeper)")
+            st.markdown("Replaces subjective emotion with a strict, mathematical checklist. Grade your setup *before* you execute. If it doesn't score highly, you do not have permission to click the mouse.")
+
+            if st.toggle("📋 Open Live Setup Grader", key="run_grader"):
+                st.markdown("### The Pre-Execution Checklist")
+                st.markdown("Check the boxes that actively apply to your current setup. Be ruthlessly honest.")
+                
+                # The 5 strict criteria based on your specific edge leaks
+                c1 = st.checkbox("1. HTF Alignment: Is the Higher Timeframe trend strongly supporting this direction?")
+                c2 = st.checkbox("2. Key Level: Are we reacting off a major, pre-planned liquidity level (e.g., VWAP, PDC, Major S/R)?")
+                c3 = st.checkbox("3. Signal/Momentum: Is there a clear, high-conviction trigger or aggressive tape momentum?")
+                c4 = st.checkbox("4. R:R Profile: Is the structural stop-loss logical, and does the reward offer at least 2x the risk?")
+                c5 = st.checkbox("5. Mental State: Am I calm, focused, and outside of my 15-minute 'Rapid-Fire' blackout window?")
+                
+                score = sum([c1, c2, c3, c4, c5])
+                
+                st.markdown("---")
+                if score == 5:
+                    st.success(f"**Score: 5/5 (A+ Setup)**. The math is on your side. Execute the trade with full conviction and your standard size.")
+                elif score == 4:
+                    st.info(f"**Score: 4/5 (B Setup)**. Valid setup, but missing one confluence. You are cleared to execute, but consider dropping to half size (e.g., 1-lot instead of 2-lot).")
+                elif score >= 2:
+                    st.warning(f"**Score: {score}/5 (C Setup - CHOP)**. Do not touch the mouse. This is the exact low-probability 'Baseline' trade that we proved is bleeding your account.")
+                else:
+                    st.error(f"**Score: {score}/5 (F Setup - GAMBLING)**. Step away from the desk immediately. Taking this trade is a direct violation of your edge and is driven purely by tilt.")
+                    
+                st.caption("Action Item: Going forward, log this exact 0-5 score in your Excel/CSV journal instead of your subjective 1-10 slider. Once you log enough trades with this new scoring system, we can upgrade this dashboard to calculate the exact Expected Value (EV) of your 5/5 trades vs your 3/5 trades.")
+            # -----------------------------------------------------
+
+            # --- NEW UI: The Stop-Loss Optimizer ---
+            st.markdown("---")
+            st.subheader("19. The Stop-Loss Optimizer (The Excursion Buffer)")
+            st.markdown("Analyzes the Maximum Adverse Excursion (MAE) of your **winning trades** to calculate exactly how much heat your setups need to survive. Proves if your stop losses are mathematically too tight.")
+            
+            if st.toggle("🛡️ Run Stop-Loss Optimizer", key="run_sl_opt"):
+                
+                # --- NEW UI: Localized Filters ---
+                col_sl1, col_sl2 = st.columns(2)
+                with col_sl1:
+                    sl_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                    selected_sl_inst = st.multiselect("Filter SL Optimizer by Instrument:", sl_instruments, key="sl_inst_filter")
+                with col_sl2:
+                    sl_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                    selected_sl_dates = st.multiselect("Filter SL Optimizer by Trading Day:", sl_dates, key="sl_date_filter")
+                # ---------------------------------
+                
+                sl_df = master_df.dropna(subset=['Net_PnL', 'Qty']).copy()
+                
+                if selected_sl_inst:
+                    sl_df = sl_df[sl_df['Instrument'].isin(selected_sl_inst)]
+                if selected_sl_dates:
+                    sl_df = sl_df[sl_df['Date_str'].isin(selected_sl_dates)]
+                    
+                winning_trades = sl_df[sl_df['Net_PnL'] > 0].copy()
+                
+                POINT_VALUES = {
+                    'ES': 50, 'MES': 5, 'NQ': 20, 'MNQ': 2, 'RTY': 50, 'M2K': 5,
+                    'CL': 1000, 'MCL': 100, 'QM': 500, 'QG': 12.5, 'NG': 10000, 
+                    'GC': 100, 'MGC': 10, 'YM': 5, 'MYM': 0.5
+                }
+                
+                if len(winning_trades) > 5:
+                    my_bar = st.progress(0, text="Calculating structural heat profiles for winning trades...")
+                    heat_data = []
+                    total_wins = len(winning_trades)
+                    
+                    for idx, (i, row) in enumerate(winning_trades.iterrows()):
+                        if idx % 5 == 0:
+                            my_bar.progress(min(idx / total_wins, 1.0), text=f"Analyzing trade {idx} of {total_wins}...")
+                            
+                        mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
+                        
+                        if mae != "N/A":
+                            instrument = row['Instrument']
+                            multiplier = 1.0
+                            for k in sorted(POINT_VALUES.keys(), key=len, reverse=True):
+                                if instrument.startswith(k):
+                                    multiplier = POINT_VALUES[k]
+                                    break
+                                    
+                            # Heat is inherently negative or 0. We make it a positive absolute value for graphing.
+                            mae_dollar = abs(float(mae) * row['Qty'] * multiplier)
+                            
+                            heat_data.append({
+                                'Date': row['Date_str'],
+                                'Instrument': instrument,
+                                'Net_PnL': row['Net_PnL'],
+                                'Heat_Taken': mae_dollar
+                            })
+                            
+                    my_bar.empty()
+                    
+                    if heat_data:
+                        hd_df = pd.DataFrame(heat_data)
+                        
+                        avg_heat = hd_df['Heat_Taken'].mean()
+                        median_heat = hd_df['Heat_Taken'].median()
+                        safe_harbor_95 = hd_df['Heat_Taken'].quantile(0.95)
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        col_slo1, col_slo2, col_slo3 = st.columns(3)
+                        col_slo1.metric("Average Heat Endured", f"${avg_heat:.2f}", help="The average drawdown a winning trade takes before turning profitable.")
+                        col_slo2.metric("Median Heat Endured", f"${median_heat:.2f}", help="The absolute middle-ground heat level (removes massive outliers).")
+                        col_slo3.metric("The 95% 'Safe Harbor' Line", f"${safe_harbor_95:.2f}", help="95% of your winning trades take LESS than this amount of heat. If your stop is tighter than this, you are choking out winners.", delta_color="inverse")
+                        
+                        st.markdown("---")
+                        
+                        # Plotly Distribution Chart
+                        fig_sl = go.Figure()
+                        
+                        fig_sl.add_trace(go.Histogram(
+                            x=hd_df['Heat_Taken'],
+                            nbinsx=20,
+                            marker_color='#26a69a',
+                            name='Winning Trades'
+                        ))
+                        
+                        # Add Vertical Lines for Insights
+                        fig_sl.add_vline(x=avg_heat, line_dash="dash", line_color="#FFD700", annotation_text=f"Avg Heat (${avg_heat:.0f})", annotation_position="top right")
+                        fig_sl.add_vline(x=safe_harbor_95, line_dash="solid", line_color="#ef5350", line_width=3, annotation_text=f"95% Safe Harbor (${safe_harbor_95:.0f})", annotation_position="top right")
+                        
+                        fig_sl.update_layout(
+                            title="Heat Distribution Profile (How much room your winners need to breathe)",
+                            height=450,
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            xaxis=dict(title='Maximum Adverse Excursion (Heat Taken in $)', tickprefix="$", gridcolor='rgba(128, 128, 128, 0.1)'),
+                            yaxis=dict(title='Number of Trades', gridcolor='rgba(128, 128, 128, 0.1)'),
+                            bargap=0.05
+                        )
+                        st.plotly_chart(fig_sl, use_container_width=True)
+                        
+                        st.info(f"**Diagnosis:** To successfully capture the vast majority of your winning setups, your stop loss MUST be placed beyond the **${safe_harbor_95:.2f}** mark. If you routinely cut trades when you are down ${median_heat:.2f}, you are killing perfectly valid setups just because you are uncomfortable with normal market breathing.")
+                    else:
+                        st.info("Could not calculate heat data for these trades.")
+                else:
+                    st.info("Log at least 6 winning trades to unlock the Stop-Loss Optimizer.")
+            # -----------------------------------------------------
+            
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("18. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("20. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
