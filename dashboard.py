@@ -1674,9 +1674,121 @@ else:
                     st.info("No scratch trades found within the specified threshold and filters.")
             # -----------------------------------------------
 
+            # --- NEW UI: The Rapid-Fire Tilt Sensor ---
+            st.markdown("---")
+            st.subheader("15. The Rapid-Fire Tilt Sensor (Execution Gap Analysis)")
+            st.markdown("Measures the precise time gap between closing one trade and opening the next. Mathematically proves the cost of impatience and 'revenge clicking'.")
+            
+            if st.toggle("⏱️ Run Rapid-Fire Tilt Analysis", key="run_rapid_fire"):
+                
+                # --- NEW UI: Localized Filters ---
+                col_rf_filt1, col_rf_filt2 = st.columns(2)
+                with col_rf_filt1:
+                    rf_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                    selected_rf_inst = st.multiselect("Filter Rapid-Fire by Instrument:", rf_instruments, key="rf_inst_filter")
+                with col_rf_filt2:
+                    rf_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                    selected_rf_dates = st.multiselect("Filter Rapid-Fire by Trading Day:", rf_dates, key="rf_date_filter")
+                # -----------------------------------------------
+                
+                rf_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
+                
+                # Convert times to proper datetimes for accurate gap math
+                rf_df['Entry_DT'] = pd.to_datetime(rf_df['Entry_Time'], errors='coerce')
+                rf_df['Exit_DT'] = pd.to_datetime(rf_df['Exit_Time'], errors='coerce')
+                
+                # Shift within each day to find the gap between previous exit and current entry
+                rf_df['Prev_Exit_DT'] = rf_df.groupby('Date_str')['Exit_DT'].shift(1)
+                rf_df['Gap_Seconds'] = (rf_df['Entry_DT'] - rf_df['Prev_Exit_DT']).dt.total_seconds()
+                
+                # Apply Filters AFTER calculating the chronological gaps
+                if selected_rf_inst:
+                    rf_df = rf_df[rf_df['Instrument'].isin(selected_rf_inst)]
+                if selected_rf_dates:
+                    rf_df = rf_df[rf_df['Date_str'].isin(selected_rf_dates)]
+                
+                # Only analyze sequential trades (gap > 0). 
+                # Negative or 0 gap means you are adding to a position you are already in (scaling).
+                valid_gaps = rf_df[(rf_df['Gap_Seconds'] > 0) & (rf_df['Gap_Seconds'] < 14400)].copy() # Excludes massive 4+ hour session breaks
+                
+                if len(valid_gaps) > 0:
+                    # Define Time Bins
+                    def categorize_gap(seconds):
+                        if seconds <= 60: return "1. < 60 Seconds"
+                        elif seconds <= 180: return "2. 1 to 3 Mins"
+                        elif seconds <= 300: return "3. 3 to 5 Mins"
+                        elif seconds <= 900: return "4. 5 to 15 Mins"
+                        else: return "5. > 15 Mins"
+                        
+                    valid_gaps['Gap_Category'] = valid_gaps['Gap_Seconds'].apply(categorize_gap)
+                    
+                    gap_stats = valid_gaps.groupby('Gap_Category').agg(
+                        Trade_Count=('Net_PnL', 'count'),
+                        Total_Net_PnL=('Net_PnL', 'sum'),
+                        Wins=('Net_PnL', lambda x: (x > 0).sum())
+                    ).reset_index()
+                    
+                    gap_stats['Win_Rate'] = (gap_stats['Wins'] / gap_stats['Trade_Count']) * 100
+                    gap_stats = gap_stats.sort_values('Gap_Category')
+                    
+                    # Calculate metrics for Impulsive vs Patient
+                    impulsive_trades = valid_gaps[valid_gaps['Gap_Seconds'] <= 60]
+                    impulsive_wr = (len(impulsive_trades[impulsive_trades['Net_PnL'] > 0]) / len(impulsive_trades) * 100) if len(impulsive_trades) > 0 else 0
+                    impulsive_pnl = impulsive_trades['Net_PnL'].sum()
+                    
+                    patient_trades = valid_gaps[valid_gaps['Gap_Seconds'] > 300]
+                    patient_wr = (len(patient_trades[patient_trades['Net_PnL'] > 0]) / len(patient_trades) * 100) if len(patient_trades) > 0 else 0
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    col_rf1, col_rf2, col_rf3 = st.columns(3)
+                    col_rf1.metric("Sub-60 Sec Win Rate", f"{impulsive_wr:.1f}%", help="Win rate when you re-enter the market less than a minute after closing a trade.")
+                    col_rf2.metric("Sub-60 Sec Total P&L", f"${impulsive_pnl:.2f}", help="Money made/lost from pure impulsive rapid-fire clicking.")
+                    col_rf3.metric("Patient (>5 Min) Win Rate", f"{patient_wr:.1f}%", help="Win rate when you wait at least 5 minutes before re-entering.")
+                    
+                    st.markdown("---")
+                    
+                    fig_rf = go.Figure()
+                    
+                    # Net P&L Bar (Primary Y-Axis)
+                    fig_rf.add_trace(go.Bar(
+                        x=gap_stats['Gap_Category'],
+                        y=gap_stats['Total_Net_PnL'],
+                        name='Net P&L',
+                        marker_color=['#26a69a' if val >= 0 else '#ef5350' for val in gap_stats['Total_Net_PnL']],
+                        yaxis='y1'
+                    ))
+                    
+                    # Win Rate Line (Secondary Y-Axis)
+                    fig_rf.add_trace(go.Scatter(
+                        x=gap_stats['Gap_Category'],
+                        y=gap_stats['Win_Rate'],
+                        name='Win Rate %',
+                        mode='lines+markers',
+                        line=dict(color='#FFD700', width=3),
+                        marker=dict(size=10, color='#FFD700', line=dict(width=1, color='DarkSlateGrey')),
+                        yaxis='y2'
+                    ))
+                    
+                    fig_rf.update_layout(
+                        title="Execution Efficiency Based on Cooldown Time",
+                        height=400,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        xaxis=dict(title='Time Between Closing Last Trade & Opening Next', gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis=dict(title='Total Net P&L ($)', tickprefix="$", gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis2=dict(title='Win Rate (%)', overlaying='y', side='right', range=[0, 105], showgrid=False),
+                        hovermode='x unified',
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_rf, use_container_width=True)
+                else:
+                    st.info("Not enough sequential trade data to calculate Gap metrics. (Overlapping scale-ins are ignored).")
+            # -----------------------------------------------
+
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("15. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("16. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
