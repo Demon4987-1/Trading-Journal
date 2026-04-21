@@ -1247,77 +1247,87 @@ else:
                 else:
                     st.info("Not enough scaled positions (multiple executions overlapping in time) to calculate Scaling Alpha.")
             # ----------------------------------------
-
-            # --- NEW UI: The Conviction Curve (Size-Induced Panic) ---
+# --- NEW UI: The Conviction Curve (Size-Induced Panic) ---
             st.markdown("---")
             st.subheader("9. The Conviction Curve (Size-Induced Panic)")
-            
+            st.markdown("Plots your Average Exit Efficiency (MFE Capture Rate) against your Position Size. A steep drop-off exposes your psychological volume ceiling.")
+
             if st.toggle("📉 Run Conviction Curve Analysis", key="run_conviction"):
-                # --- NEW UI: Localized Conviction Filters ---
-                conv_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
-                selected_conv_inst = st.multiselect("Filter Conviction Curve by Instrument (leave blank to chart all):", conv_instruments, key="conv_inst_filter")
+                cc_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_cc_inst = st.multiselect("Filter Conviction Curve by Instrument:", cc_instruments, key="cc_inst_filter")
                 
-                conv_dates = list(master_df['Date_str'].dropna().unique())[::-1]
-                selected_conv_dates = st.multiselect("Filter Conviction Curve by Trading Day (leave blank to chart all):", conv_dates, key="conv_date_filter")
-                # --------------------------------------------
+                cc_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_cc_dates = st.multiselect("Filter Conviction Curve by Trading Day:", cc_dates, key="cc_date_filter")
 
                 cc_df = master_df.dropna(subset=['Net_PnL', 'Qty']).copy()
-                
-                if selected_conv_inst:
-                    cc_df = cc_df[cc_df['Instrument'].isin(selected_conv_inst)]
-                if selected_conv_dates:
-                    cc_df = cc_df[cc_df['Date_str'].isin(selected_conv_dates)]
-                    
-                total_trades = len(cc_df)
-                conviction_data = []
-                
-                if total_trades > 0:
-                    my_bar = st.progress(0, text="Crunching MFE data for all historical trades...")
-                    
-                    for idx, (i, row) in enumerate(cc_df.iterrows()):
-                        if idx % 10 == 0:  # Update progress bar every 10 trades
-                            my_bar.progress(min(idx / total_trades, 1.0), text=f"Analyzing trade {idx} of {total_trades}...")
-                            
+                if selected_cc_inst:
+                    cc_df = cc_df[cc_df['Instrument'].isin(selected_cc_inst)]
+                if selected_cc_dates:
+                    cc_df = cc_df[cc_df['Date_str'].isin(selected_cc_dates)]
+
+                winning_cc = cc_df[cc_df['Net_PnL'] > 0].copy()
+
+                if len(winning_cc) > 0:
+                    my_bar_cc = st.progress(0, text="Calculating Exit Efficiency per Position Size...")
+                    cc_data = []
+                    total_cc = len(winning_cc)
+
+                    for idx, (i, row) in enumerate(winning_cc.iterrows()):
+                        if idx % 5 == 0:
+                            my_bar_cc.progress(min(idx / total_cc, 1.0), text=f"Analyzing trade {idx} of {total_cc}...")
+
                         mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
                         
                         if mfe != "N/A" and float(mfe) > 0:
                             t_type = row.get('trade_type', 'Unknown').upper()
                             captured_pts = (row['Exit_Price'] - row['Entry_Price']) if t_type == 'LONG' else (row['Entry_Price'] - row['Exit_Price'])
-                            eff = min((captured_pts / float(mfe)) * 100, 100.0) if captured_pts > 0 else 0.0
-                            conviction_data.append({'Qty': row['Qty'], 'Efficiency': eff})
-                    
-                    my_bar.empty() # Hide progress bar when finished
-                    
-                    if conviction_data:
-                        conv_df = pd.DataFrame(conviction_data)
-                        grouped_conv = conv_df.groupby('Qty').agg(
+                            
+                            if captured_pts > 0:
+                                eff = min((captured_pts / float(mfe)) * 100, 100.0)
+                            else:
+                                eff = 0.0
+                                
+                            cc_data.append({
+                                'Qty': row['Qty'],
+                                'Efficiency': eff
+                            })
+
+                    my_bar_cc.empty()
+
+                    if cc_data:
+                        cc_res = pd.DataFrame(cc_data)
+                        cc_stats = cc_res.groupby('Qty').agg(
                             Avg_Efficiency=('Efficiency', 'mean'),
                             Trade_Count=('Efficiency', 'count')
                         ).reset_index().sort_values('Qty')
-                        
-                        fig_conv = go.Figure()
-                        fig_conv.add_trace(go.Bar(
-                            x=grouped_conv['Qty'], 
-                            y=grouped_conv['Avg_Efficiency'],
-                            text=grouped_conv['Trade_Count'].apply(lambda x: f"n={x}"),
-                            textposition='auto',
-                            marker_color=['#26a69a' if val >= 50 else '#ef5350' for val in grouped_conv['Avg_Efficiency']],
-                            name='Avg Efficiency %'
-                        ))
-                        
-                        fig_conv.update_layout(
-                            height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', 
-                            xaxis=dict(title='Position Size (Contracts/Shares)', type='category'), 
-                            yaxis=dict(title='Average MFE Capture Rate (%)', range=[0, 100])
-                        )
-                        st.plotly_chart(fig_conv, use_container_width=True)
-                    else:
-                        st.info("Not enough market data available to calculate MFE efficiencies.")
-            # ---------------------------------------------------------
 
+                        fig_cc = go.Figure()
+                        fig_cc.add_trace(go.Bar(
+                            x=cc_stats['Qty'], 
+                            y=cc_stats['Avg_Efficiency'], 
+                            marker_color='#26a69a',
+                            text=[f"{n} trades" for n in cc_stats['Trade_Count']],
+                            textposition='auto'
+                        ))
+
+                        fig_cc.update_layout(
+                            title="Conviction Curve: Exit Efficiency vs. Position Size",
+                            height=400,
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            xaxis=dict(title='Position Size (Contracts/Lots)', type='category', gridcolor='rgba(128, 128, 128, 0.1)'),
+                            yaxis=dict(title='Average MFE Capture Rate (%)', range=[0, 105], gridcolor='rgba(128, 128, 128, 0.1)'),
+                            hovermode='x unified'
+                        )
+                        st.plotly_chart(fig_cc, use_container_width=True)
+                    else:
+                        st.info("Could not calculate MFE. Please ensure you have uploaded Market Data.")
+                else:
+                    st.info("Log some winning trades to generate your Conviction Curve.")
+
+            # --- NEW UI: The Runner Simulator ---
             st.markdown("---")
-            st.subheader("10. Monte Carlo Equity Simulator (Risk of Ruin)")
-            
+            st.subheader("10. The \"Runner\" Simulator (Partial Exit Optimizer)")            
             if st.toggle("🧪 Run Monte Carlo Simulator", key="run_mc"):
                 mc_df = master_df.dropna(subset=['Net_PnL'])
                 if len(mc_df) >= 10:
@@ -1363,7 +1373,7 @@ else:
                     
             # --- NEW UI: The Drawdown Behavior Matrix ---
             st.markdown("---")
-            st.subheader("11. The Drawdown Behavior Matrix (In-the-Hole Analytics)")
+            st.subheader("12. The Drawdown Behavior Matrix (In-the-Hole Analytics)")
             st.markdown("Analyzes your position sizing and hold times specifically when your daily P&L is in the red. Exposes desperation, revenge trading, and Martingale sizing.")
             
             if st.toggle("🚨 Run Drawdown Behavior Analysis", key="run_drawdown"):
@@ -1429,7 +1439,7 @@ else:
 
             # --- NEW UI: The Chrono-Matrix (2D Time/Day Heatmap) ---
             st.markdown("---")
-            st.subheader("12. The Chrono-Matrix (2D Time/Day Heatmap)")
+            st.subheader("13. The Chrono-Matrix (2D Time/Day Heatmap)")
             st.markdown("A visual grid plotting the days of the week against 15-minute time blocks, color-coded by your Net P&L. Mathematically proves your most profitable hours.")
             
             if st.toggle("⏳ Run Chrono-Matrix Analysis", key="run_chrono"):
@@ -1495,7 +1505,7 @@ else:
 
             # --- NEW UI: The Overtrading Threshold (Fatigue Matrix) ---
             st.markdown("---")
-            st.subheader("13. The Overtrading Threshold (Fatigue Matrix)")
+            st.subheader("14. The Overtrading Threshold (Fatigue Matrix)")
             st.markdown("Sequences your daily executions (Trade #1, Trade #2...) to calculate your Win Rate and profitability for each specific slot. Mathematically pinpoints exactly when decision fatigue sets in.")
             
             if st.toggle("🔋 Run Fatigue Matrix Analysis", key="run_fatigue"):
@@ -1575,7 +1585,7 @@ else:
 
             # --- NEW UI: The Scratch Autopsy ---
             st.markdown("---")
-            st.subheader("14. The \"Scratch\" Autopsy (Opportunity Cost of Anxiety)")
+            st.subheader("15. The \"Scratch\" Autopsy (Opportunity Cost of Anxiety)")
             st.markdown("Isolates your breakeven/scratch trades and calculates their Maximum Favorable (MFE) and Adverse (MAE) Excursions. Proves mathematically if your early exits are saving you from deep losses or choking out massive winners.")
             
             if st.toggle("🔍 Run Scratch Autopsy", key="run_scratch"):
@@ -1677,7 +1687,7 @@ else:
 
             # --- NEW UI: The Rapid-Fire Tilt Sensor ---
             st.markdown("---")
-            st.subheader("15. The Rapid-Fire Tilt Sensor (Execution Gap Analysis)")
+            st.subheader("16. The Rapid-Fire Tilt Sensor (Execution Gap Analysis)")
             st.markdown("Measures the precise time gap between closing one trade and opening the next. Mathematically proves the cost of impatience and 'revenge clicking'.")
             
             if st.toggle("⏱️ Run Rapid-Fire Tilt Analysis", key="run_rapid_fire"):
@@ -1789,7 +1799,7 @@ else:
 
             # --- NEW UI: The Time-in-Trade Decay Curve ---
             st.markdown("---")
-            st.subheader("16. The Time-in-Trade Decay Curve (The 'Expiration' Timer)")
+            st.subheader("17. The Time-in-Trade Decay Curve (The 'Expiration' Timer)")
             st.markdown("Plots your Win Rate and profitability against your total hold time. Mathematically reveals the exact 'expiration date' of your setups.")
             
             if st.toggle("⏳ Run Time-in-Trade Decay Analysis", key="run_decay"):
@@ -1900,7 +1910,7 @@ else:
 
             # --- NEW UI: The Euphoria Tax ---
             st.markdown("---")
-            st.subheader("17. The \"Euphoria Tax\" (Post-Streak Analytics)")
+            st.subheader("18. The \"Euphoria Tax\" (Post-Streak Analytics)")
             st.markdown("Analyzes the very next trade you take immediately after a 3+ win streak or a massive outlier profit. Proves mathematically if overconfidence destroys your discipline.")
             
             if st.toggle("🔥 Run Euphoria Tax Analysis", key="run_euphoria"):
@@ -2002,7 +2012,7 @@ else:
 
             # --- NEW UI: The Objective Trade Grader ---
             st.markdown("---")
-            st.subheader("18. The Objective Trade Grader (A+ Setup Gatekeeper)")
+            st.subheader("19. The Objective Trade Grader (A+ Setup Gatekeeper)")
             st.markdown("Replaces subjective emotion with a strict, mathematical checklist. Grade your setup *before* you execute. If it doesn't score highly, you do not have permission to click the mouse.")
 
             if st.toggle("📋 Open Live Setup Grader", key="run_grader"):
@@ -2033,7 +2043,7 @@ else:
 
             # --- NEW UI: The Stop-Loss Optimizer ---
             st.markdown("---")
-            st.subheader("19. The Stop-Loss Optimizer (The Excursion Buffer)")
+            st.subheader("20. The Stop-Loss Optimizer (The Excursion Buffer)")
             st.markdown("Analyzes the Maximum Adverse Excursion (MAE) of your **winning trades** to calculate exactly how much heat your setups need to survive. Proves if your stop losses are mathematically too tight.")
             
             if st.toggle("🛡️ Run Stop-Loss Optimizer", key="run_sl_opt"):
@@ -2143,7 +2153,7 @@ else:
 
             # --- NEW UI: The "First Blood" Anchor ---
             st.markdown("---")
-            st.subheader("20. The \"First Blood\" Anchor (Session Catalyst Matrix)")
+            st.subheader("21. The \"First Blood\" Anchor (Session Catalyst Matrix)")
             st.markdown("Measures how the outcome of your very first trade dictates the rest of your session. Exposes if a bad start mathematically guarantees a red day.")
 
             if st.toggle("⚓ Run First Blood Analysis", key="run_first_blood"):
@@ -2204,10 +2214,124 @@ else:
                 else:
                     st.info("Not enough data to calculate First Blood metrics.")
             # -----------------------------------------------------
+
+            # --- NEW UI: The "Despair Tax" ---
+            st.markdown("---")
+            st.subheader("22. The 'Despair Tax' (Consecutive Loss Spiral Sensor)")
+            st.markdown("Analyzes your execution immediately following **two consecutive losses**. Proves mathematically if taking a double-hit triggers a revenge-trading spiral (increased size, dropped win rate).")
+
+            if st.toggle("🌪️ Run Despair Tax Analysis", key="run_despair"):
+                des_df = master_df.dropna(subset=['Net_PnL', 'Qty']).copy().sort_values(by=['Date_str', 'Datetime']).reset_index(drop=True)
+                
+                # Identify the PnL of the previous 2 trades, grouped by day to prevent cross-session bleeding
+                des_df['Prev_1_PnL'] = des_df.groupby('Date_str')['Net_PnL'].shift(1)
+                des_df['Prev_2_PnL'] = des_df.groupby('Date_str')['Net_PnL'].shift(2)
+                
+                # A trade is taken in a state of "Despair" if the previous 2 trades were both losers
+                des_df['In_Despair'] = (des_df['Prev_1_PnL'] < 0) & (des_df['Prev_2_PnL'] < 0)
+                
+                despair_trades = des_df[des_df['In_Despair']]
+                baseline_trades = des_df[~des_df['In_Despair']]
+                
+                if len(despair_trades) > 0:
+                    base_wr = (len(baseline_trades[baseline_trades['Net_PnL'] > 0]) / len(baseline_trades) * 100) if len(baseline_trades) > 0 else 0
+                    des_wr = (len(despair_trades[despair_trades['Net_PnL'] > 0]) / len(despair_trades) * 100)
+                    
+                    base_size = baseline_trades['Qty'].mean() if len(baseline_trades) > 0 else 0
+                    des_size = despair_trades['Qty'].mean()
+                    
+                    des_pnl = despair_trades['Net_PnL'].sum()
+                    
+                    col_dt1, col_dt2, col_dt3 = st.columns(3)
+                    col_dt1.metric("Win Rate (In Despair)", f"{des_wr:.1f}%", f"vs {base_wr:.1f}% (Baseline)", delta_color="inverse" if des_wr < base_wr else "normal")
+                    col_dt2.metric("Avg Position Size (In Despair)", f"{des_size:.1f} lots", f"vs {base_size:.1f} (Baseline)", delta_color="inverse" if des_size > base_size else "normal")
+                    col_dt3.metric("Total Money Lost to Despair", f"${des_pnl:.2f}", help="Your net P&L from trades taken immediately after 2 consecutive losses.")
+                    
+                    fig_des = go.Figure()
+                    fig_des.add_trace(go.Bar(x=['Win Rate (%)'], y=[base_wr], name='Baseline (Normal State)', marker_color='rgba(128,128,128,0.6)'))
+                    fig_des.add_trace(go.Bar(x=['Win Rate (%)'], y=[des_wr], name='Despair (Post-2 Losses)', marker_color='#ef5350'))
+                    
+                    fig_des.add_trace(go.Bar(x=['Avg Position Size (Qty)'], y=[base_size], name='Baseline Size', marker_color='rgba(128,128,128,0.6)', showlegend=False))
+                    fig_des.add_trace(go.Bar(x=['Avg Position Size (Qty)'], y=[des_size], name='Despair Size', marker_color='#ef5350', showlegend=False))
+                    
+                    fig_des.update_layout(barmode='group', height=400, title="The Cost of the Spiral: Baseline vs Despair Executions", plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_des, use_container_width=True)
+                    
+                    st.info(f"**Diagnosis:** You have taken {len(despair_trades)} trades while in an active 'Despair' spiral. If your Win Rate drops significantly and your Position Size spikes, it mathematically proves you are revenge trading. **Rule: After 2 consecutive losses, disconnect the mouse for 30 minutes.**")
+                else:
+                    st.success("No 'Despair' trades found! You haven't taken a trade immediately following 2 consecutive losses.")
+            # -----------------------------------------------------
             
+            # --- NEW UI: The Time-of-Day Liquidity Matrix ---
+            st.markdown("---")
+            st.subheader("23. Time-of-Day Liquidity Matrix (The Chop Clock)")
+            st.markdown("Maps your Win Rate and Total P&L across specific 30-minute execution windows. Mathematically proves which hours provide algorithmic momentum, and when you are required to walk away.")
+
+            if st.toggle("🕒 Run Chop Clock Analysis", key="run_chop_clock"):
+                chop_df = master_df.dropna(subset=['Entry_Time', 'Net_PnL']).copy()
+                
+                # Convert to datetime and floor to the nearest 30-minute bucket
+                chop_df['Entry_DT'] = pd.to_datetime(chop_df['Entry_Time'], errors='coerce')
+                chop_df = chop_df.dropna(subset=['Entry_DT'])
+                chop_df['Time_Bucket'] = chop_df['Entry_DT'].dt.floor('30min').dt.time
+                
+                if not chop_df.empty:
+                    # Aggregate stats per time bucket
+                    bucket_stats = chop_df.groupby('Time_Bucket').agg(
+                        Trade_Count=('Net_PnL', 'count'),
+                        Total_PnL=('Net_PnL', 'sum'),
+                        Wins=('Net_PnL', lambda x: (x > 0).sum())
+                    ).reset_index()
+                    
+                    bucket_stats['Win_Rate'] = (bucket_stats['Wins'] / bucket_stats['Trade_Count']) * 100
+                    bucket_stats['Time_Label'] = bucket_stats['Time_Bucket'].apply(lambda x: x.strftime('%H:%M'))
+                    bucket_stats = bucket_stats.sort_values('Time_Bucket')
+                    
+                    col_c1, col_c2 = st.columns(2)
+                    best_bucket = bucket_stats.loc[bucket_stats['Total_PnL'].idxmax()]
+                    worst_bucket = bucket_stats.loc[bucket_stats['Total_PnL'].idxmin()]
+                    
+                    col_c1.metric("Most Profitable Window", f"{best_bucket['Time_Label']}", f"${best_bucket['Total_PnL']:.2f} (WR: {best_bucket['Win_Rate']:.0f}%)")
+                    col_c2.metric("Most Toxic Window", f"{worst_bucket['Time_Label']}", f"${worst_bucket['Total_PnL']:.2f} (WR: {worst_bucket['Win_Rate']:.0f}%)", delta_color="inverse")
+                    
+                    fig_chop = go.Figure()
+                    
+                    # Color positive buckets green, negative buckets red
+                    colors = ['#26a69a' if val > 0 else '#ef5350' for val in bucket_stats['Total_PnL']]
+                    
+                    fig_chop.add_trace(go.Bar(
+                        x=bucket_stats['Time_Label'], 
+                        y=bucket_stats['Total_PnL'], 
+                        name='Total P&L', 
+                        marker_color=colors,
+                        text=[f"WR: {wr:.0f}%<br>({tc} trades)" for wr, tc in zip(bucket_stats['Win_Rate'], bucket_stats['Trade_Count'])],
+                        textposition='outside',
+                        textfont=dict(size=10)
+                    ))
+                    
+                    # Calculate reasonable y-axis limits to prevent text from being cut off
+                    y_max = bucket_stats['Total_PnL'].max() * 1.2 if bucket_stats['Total_PnL'].max() > 0 else 100
+                    y_min = bucket_stats['Total_PnL'].min() * 1.2 if bucket_stats['Total_PnL'].min() < 0 else -100
+
+                    fig_chop.update_layout(
+                        title="Net P&L by 30-Minute Execution Windows",
+                        height=500,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        xaxis=dict(title='Time of Day (30-Minute Blocks)', type='category', gridcolor='rgba(128, 128, 128, 0.1)'),
+                        yaxis=dict(title='Total P&L ($)', tickprefix="$", range=[y_min, y_max], gridcolor='rgba(128, 128, 128, 0.1)'),
+                        hovermode='x unified'
+                    )
+                    st.plotly_chart(fig_chop, use_container_width=True)
+                    
+                    st.info(f"**Diagnosis:** Your data mathematically proves that the **{worst_bucket['Time_Label']}** window is your personal 'Chop Zone'. You are officially banned from taking new setups during this specific 30-minute block.")
+                else:
+                    st.info("Not enough valid timestamp data to construct the Chop Clock.")
+            # -----------------------------------------------------
+
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("21. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("24. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
@@ -2266,7 +2390,6 @@ else:
         st.divider()
         st.header("🧠 Reminder Center & Content Vault")
         st.markdown("Filter your historical trades by the psychological and technical lessons they taught you. Use this to instantly generate YouTube script materials or prep for your trading day.")
-        
         vault_tags = st.multiselect("Select Lessons to Extract:", LESSON_TAGS)
         
         if vault_tags:
