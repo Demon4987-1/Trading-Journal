@@ -1010,246 +1010,247 @@ else:
             st.subheader("5. The Scalper's Heatmap (MAE vs. MFE)")
             st.markdown("Visualizes the maximum heat (MAE) taken versus the maximum profit potential (MFE). Use this to mathematically optimize your stop-loss placement.")
             
-            hm_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
-            selected_hm_inst = st.multiselect("Filter Heatmap by Instrument (leave blank to chart all):", hm_instruments, key="hm_inst_filter")
-            
-            hm_dates = list(master_df['Date_str'].dropna().unique())[::-1]
-            selected_hm_dates = st.multiselect("Filter Heatmap by Trading Day (leave blank to chart all):", hm_dates, key="hm_date_filter")
-            
-            hm_target_df = master_df.copy()
-            if selected_hm_inst:
-                hm_target_df = hm_target_df[hm_target_df['Instrument'].isin(selected_hm_inst)]
-            if selected_hm_dates:
-                hm_target_df = hm_target_df[hm_target_df['Date_str'].isin(selected_hm_dates)]
-            
-            heatmap_data = []
-            efficiency_scores = []
-            
-            for _, row in hm_target_df.iterrows():
-                mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
-                if mfe != "N/A" and mae != "N/A":
-                    heatmap_data.append({'Trade': f"{row['Instrument']} ({row['Timestamp']})", 'MFE': float(mfe), 'MAE': float(mae), 'Net_PnL': row['Net_PnL']})
+            if st.toggle("🗺️ Run Scalper's Heatmap", key="run_heatmap"):
+                hm_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_hm_inst = st.multiselect("Filter Heatmap by Instrument (leave blank to chart all):", hm_instruments, key="hm_inst_filter")
+                
+                hm_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_hm_dates = st.multiselect("Filter Heatmap by Trading Day (leave blank to chart all):", hm_dates, key="hm_date_filter")
+                
+                hm_target_df = master_df.copy()
+                if selected_hm_inst:
+                    hm_target_df = hm_target_df[hm_target_df['Instrument'].isin(selected_hm_inst)]
+                if selected_hm_dates:
+                    hm_target_df = hm_target_df[hm_target_df['Date_str'].isin(selected_hm_dates)]
+                
+                heatmap_data = []
+                efficiency_scores = []
+                
+                for _, row in hm_target_df.iterrows():
+                    mfe, mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
+                    if mfe != "N/A" and mae != "N/A":
+                        heatmap_data.append({'Trade': f"{row['Instrument']} ({row['Timestamp']})", 'MFE': float(mfe), 'MAE': float(mae), 'Net_PnL': row['Net_PnL']})
+                        
+                        t_type = row.get('trade_type', 'Unknown').upper()
+                        captured_pts = (row['Exit_Price'] - row['Entry_Price']) if t_type == 'LONG' else (row['Entry_Price'] - row['Exit_Price'])
+                        
+                        if float(mfe) > 0 and captured_pts > 0:
+                            efficiency_scores.append(min((captured_pts / float(mfe)) * 100, 100.0))
+                        elif float(mfe) > 0:
+                            efficiency_scores.append(0.0)
+                
+                if efficiency_scores:
+                    avg_efficiency = sum(efficiency_scores) / len(efficiency_scores)
+                    st.metric("🎯 Average MFE Capture Rate (Filtered Data)", f"{avg_efficiency:.1f}%")
+                
+                if heatmap_data:
+                    hm_df = pd.DataFrame(heatmap_data)
+                    fig_hm = go.Figure()
                     
-                    t_type = row.get('trade_type', 'Unknown').upper()
-                    captured_pts = (row['Exit_Price'] - row['Entry_Price']) if t_type == 'LONG' else (row['Entry_Price'] - row['Exit_Price'])
+                    wins = hm_df[hm_df['Net_PnL'] > 0]
+                    fig_hm.add_trace(go.Scatter(x=wins['MAE'], y=wins['MFE'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')), text=wins['Trade']))
                     
-                    if float(mfe) > 0 and captured_pts > 0:
-                        efficiency_scores.append(min((captured_pts / float(mfe)) * 100, 100.0))
-                    elif float(mfe) > 0:
-                        efficiency_scores.append(0.0)
-            
-            if efficiency_scores:
-                avg_efficiency = sum(efficiency_scores) / len(efficiency_scores)
-                st.metric("🎯 Average MFE Capture Rate (Filtered Data)", f"{avg_efficiency:.1f}%")
-            
-            if heatmap_data:
-                hm_df = pd.DataFrame(heatmap_data)
-                fig_hm = go.Figure()
-                
-                wins = hm_df[hm_df['Net_PnL'] > 0]
-                fig_hm.add_trace(go.Scatter(x=wins['MAE'], y=wins['MFE'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')), text=wins['Trade']))
-                
-                losses = hm_df[hm_df['Net_PnL'] <= 0]
-                fig_hm.add_trace(go.Scatter(x=losses['MAE'], y=losses['MFE'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')), text=losses['Trade']))
-                
-                fig_hm.update_layout(height=500, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Max Adverse Excursion (MAE) - Heat Taken', autorange="reversed", gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Max Favorable Excursion (MFE) - Potential Profit', gridcolor='rgba(128, 128, 128, 0.2)'))
-                st.plotly_chart(fig_hm, use_container_width=True)
-            else:
-                st.info("Upload Market Data to generate the Scalper's Heatmap.")
+                    losses = hm_df[hm_df['Net_PnL'] <= 0]
+                    fig_hm.add_trace(go.Scatter(x=losses['MAE'], y=losses['MFE'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.8, line=dict(width=1, color='DarkSlateGrey')), text=losses['Trade']))
+                    
+                    fig_hm.update_layout(height=500, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Max Adverse Excursion (MAE) - Heat Taken', autorange="reversed", gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Max Favorable Excursion (MFE) - Potential Profit', gridcolor='rgba(128, 128, 128, 0.2)'))
+                    st.plotly_chart(fig_hm, use_container_width=True)
+                else:
+                    st.info("Upload Market Data to generate the Scalper's Heatmap.")
 
             st.markdown("---")
             st.subheader("6. Trade Duration vs. Profitability (The 'Hope' Metric)")
             st.markdown("Visualizes how long you hold trades versus how much they pay. If your losing trades cluster to the right of your winning trades, it proves you are holding and hoping instead of cutting losses.")
             
-            hope_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
-            selected_hope_inst = st.multiselect("Filter Hope Metric by Instrument (leave blank to chart all):", hope_instruments, key="hope_inst_filter")
-            
-            hope_dates = list(master_df['Date_str'].dropna().unique())[::-1]
-            selected_hope_dates = st.multiselect("Filter Hope Metric by Trading Day (leave blank to chart all):", hope_dates, key="hope_date_filter")
-            
-            dur_df = master_df.copy()
-            if selected_hope_inst:
-                dur_df = dur_df[dur_df['Instrument'].isin(selected_hope_inst)]
-            if selected_hope_dates:
-                dur_df = dur_df[dur_df['Date_str'].isin(selected_hope_dates)]
-            
-            dur_df['Dur_Secs'] = dur_df['Duration'].apply(parse_duration_to_seconds)
-            dur_df = dur_df[dur_df['Dur_Secs'] > 0] 
-            
-            if not dur_df.empty:
-                fig_dur = go.Figure()
+            if st.toggle("⏱️ Run Duration Analysis", key="run_duration"):
+                hope_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_hope_inst = st.multiselect("Filter Hope Metric by Instrument (leave blank to chart all):", hope_instruments, key="hope_inst_filter")
                 
-                wins_dur = dur_df[dur_df['Net_PnL'] > 0]
-                fig_dur.add_trace(go.Scatter(x=wins_dur['Dur_Secs'], y=wins_dur['Net_PnL'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=wins_dur['Instrument'] + " | " + wins_dur['Duration']))
+                hope_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_hope_dates = st.multiselect("Filter Hope Metric by Trading Day (leave blank to chart all):", hope_dates, key="hope_date_filter")
                 
-                loss_dur = dur_df[dur_df['Net_PnL'] <= 0]
-                fig_dur.add_trace(go.Scatter(x=loss_dur['Dur_Secs'], y=loss_dur['Net_PnL'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=loss_dur['Instrument'] + " | " + loss_dur['Duration']))
+                dur_df = master_df.copy()
+                if selected_hope_inst:
+                    dur_df = dur_df[dur_df['Instrument'].isin(selected_hope_inst)]
+                if selected_hope_dates:
+                    dur_df = dur_df[dur_df['Date_str'].isin(selected_hope_dates)]
                 
-                fig_dur.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Trade Duration (Seconds)', gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
-                st.plotly_chart(fig_dur, use_container_width=True)
-            else:
-                st.info("No duration data available to plot.")
+                dur_df['Dur_Secs'] = dur_df['Duration'].apply(parse_duration_to_seconds)
+                dur_df = dur_df[dur_df['Dur_Secs'] > 0] 
+                
+                if not dur_df.empty:
+                    fig_dur = go.Figure()
+                    
+                    wins_dur = dur_df[dur_df['Net_PnL'] > 0]
+                    fig_dur.add_trace(go.Scatter(x=wins_dur['Dur_Secs'], y=wins_dur['Net_PnL'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=wins_dur['Instrument'] + " | " + wins_dur['Duration']))
+                    
+                    loss_dur = dur_df[dur_df['Net_PnL'] <= 0]
+                    fig_dur.add_trace(go.Scatter(x=loss_dur['Dur_Secs'], y=loss_dur['Net_PnL'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=loss_dur['Instrument'] + " | " + loss_dur['Duration']))
+                    
+                    fig_dur.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Trade Duration (Seconds)', gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
+                    st.plotly_chart(fig_dur, use_container_width=True)
+                else:
+                    st.info("No duration data available to plot.")
 
             st.markdown("---")
             st.subheader("7. Tilt Velocity Radar (Time-Between-Trades)")
             st.markdown("Measures the exact time gap between a losing trade's exit and your very next entry. A low win rate on the left side of this chart mathematically proves Revenge Trading.")
             
-            tilt_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
-            selected_tilt_inst = st.multiselect("Filter Tilt Radar by Instrument (leave blank to chart all):", tilt_instruments, key="tilt_inst_filter")
-            
-            tilt_dates = list(master_df['Date_str'].dropna().unique())[::-1]
-            selected_tilt_dates = st.multiselect("Filter Tilt Radar by Trading Day (leave blank to chart all):", tilt_dates, key="tilt_date_filter")
+            if st.toggle("🚨 Run Tilt Velocity Radar", key="run_tilt_vel"):
+                tilt_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_tilt_inst = st.multiselect("Filter Tilt Radar by Instrument (leave blank to chart all):", tilt_instruments, key="tilt_inst_filter")
+                
+                tilt_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_tilt_dates = st.multiselect("Filter Tilt Radar by Trading Day (leave blank to chart all):", tilt_dates, key="tilt_date_filter")
 
-            tilt_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
-            tilt_df['Exit_Datetime'] = pd.to_datetime(tilt_df['Exit_Time'], errors='coerce')
-            
-            tilt_df['Prev_Net_PnL'] = tilt_df['Net_PnL'].shift(1)
-            tilt_df['Prev_Exit'] = tilt_df['Exit_Datetime'].shift(1)
-            
-            tilt_df['Tilt_Gap_Mins'] = (tilt_df['Datetime'] - tilt_df['Prev_Exit']).dt.total_seconds() / 60.0
-            
-            tilt_target = tilt_df[(tilt_df['Prev_Net_PnL'] < 0) & (tilt_df['Tilt_Gap_Mins'] > 0) & (tilt_df['Tilt_Gap_Mins'] <= 60)].copy()
-            
-            if selected_tilt_inst:
-                tilt_target = tilt_target[tilt_target['Instrument'].isin(selected_tilt_inst)]
-            if selected_tilt_dates:
-                tilt_target = tilt_target[tilt_target['Date_str'].isin(selected_tilt_dates)]
-            
-            if not tilt_target.empty:
-                fig_tilt = go.Figure()
+                tilt_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
+                tilt_df['Exit_Datetime'] = pd.to_datetime(tilt_df['Exit_Time'], errors='coerce')
                 
-                tilt_wins = tilt_target[tilt_target['Net_PnL'] > 0]
-                fig_tilt.add_trace(go.Scatter(x=tilt_wins['Tilt_Gap_Mins'], y=tilt_wins['Net_PnL'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=tilt_wins['Instrument']))
+                tilt_df['Prev_Net_PnL'] = tilt_df['Net_PnL'].shift(1)
+                tilt_df['Prev_Exit'] = tilt_df['Exit_Datetime'].shift(1)
                 
-                tilt_losses = tilt_target[tilt_target['Net_PnL'] <= 0]
-                fig_tilt.add_trace(go.Scatter(x=tilt_losses['Tilt_Gap_Mins'], y=tilt_losses['Net_PnL'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=tilt_losses['Instrument']))
+                tilt_df['Tilt_Gap_Mins'] = (tilt_df['Datetime'] - tilt_df['Prev_Exit']).dt.total_seconds() / 60.0
                 
-                fast_tilt = tilt_target[tilt_target['Tilt_Gap_Mins'] <= 5]
-                fast_wr = (len(fast_tilt[fast_tilt['Net_PnL'] > 0]) / len(fast_tilt) * 100) if len(fast_tilt) > 0 else 0
+                tilt_target = tilt_df[(tilt_df['Prev_Net_PnL'] < 0) & (tilt_df['Tilt_Gap_Mins'] > 0) & (tilt_df['Tilt_Gap_Mins'] <= 60)].copy()
                 
-                st.markdown(f"**Quick Stat:** Your Win Rate when re-entering within 5 minutes of a loss is **{fast_wr:.1f}%** ({len(fast_tilt)} trades).")
+                if selected_tilt_inst:
+                    tilt_target = tilt_target[tilt_target['Instrument'].isin(selected_tilt_inst)]
+                if selected_tilt_dates:
+                    tilt_target = tilt_target[tilt_target['Date_str'].isin(selected_tilt_dates)]
                 
-                fig_tilt.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Minutes Since Last Losing Trade', gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
-                st.plotly_chart(fig_tilt, use_container_width=True)
-            else:
-                st.info("Not enough sequential data to calculate Tilt Velocity. Keep logging trades!")
-                
-            st.markdown("---")
-            # --- NEW UI: The Scaling Alpha Engine ---
+                if not tilt_target.empty:
+                    fig_tilt = go.Figure()
+                    
+                    tilt_wins = tilt_target[tilt_target['Net_PnL'] > 0]
+                    fig_tilt.add_trace(go.Scatter(x=tilt_wins['Tilt_Gap_Mins'], y=tilt_wins['Net_PnL'], mode='markers', name='Winning Trades', marker=dict(color='#26a69a', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=tilt_wins['Instrument']))
+                    
+                    tilt_losses = tilt_target[tilt_target['Net_PnL'] <= 0]
+                    fig_tilt.add_trace(go.Scatter(x=tilt_losses['Tilt_Gap_Mins'], y=tilt_losses['Net_PnL'], mode='markers', name='Losing Trades', marker=dict(color='#ef5350', size=10, opacity=0.7, line=dict(width=1, color='DarkSlateGrey')), text=tilt_losses['Instrument']))
+                    
+                    fast_tilt = tilt_target[tilt_target['Tilt_Gap_Mins'] <= 5]
+                    fast_wr = (len(fast_tilt[fast_tilt['Net_PnL'] > 0]) / len(fast_tilt) * 100) if len(fast_tilt) > 0 else 0
+                    
+                    st.markdown(f"**Quick Stat:** Your Win Rate when re-entering within 5 minutes of a loss is **{fast_wr:.1f}%** ({len(fast_tilt)} trades).")
+                    
+                    fig_tilt.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', xaxis=dict(title='Minutes Since Last Losing Trade', gridcolor='rgba(128, 128, 128, 0.2)'), yaxis=dict(title='Net P&L ($)', gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"))
+                    st.plotly_chart(fig_tilt, use_container_width=True)
+                else:
+                    st.info("Not enough sequential data to calculate Tilt Velocity. Keep logging trades!")
+                    
             st.markdown("---")
             st.subheader("8. Scaling Alpha Engine (Efficiency Check)")
             st.markdown("Compares your actual P&L from **overlapping scale-ins** against a simulated baseline: *What if you entered your total position size at your first entry price, and exited everything at your final exit price?*")
 
-            POINT_VALUES = {
-                'ES': 50, 'MES': 5, 'NQ': 20, 'MNQ': 2, 'RTY': 50, 'M2K': 5,
-                'CL': 1000, 'MCL': 100, 'QM': 500, 'QG': 12.5, 'NG': 10000, 
-                'GC': 100, 'MGC': 10, 'YM': 5, 'MYM': 0.5
-            }
-            
-            # --- NEW UI: Localized Scaling Filters ---
-            alpha_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
-            selected_alpha_inst = st.multiselect("Filter Scaling Alpha by Instrument (leave blank to chart all):", alpha_instruments, key="alpha_inst_filter")
-            
-            alpha_dates = list(master_df['Date_str'].dropna().unique())[::-1]
-            selected_alpha_dates = st.multiselect("Filter Scaling Alpha by Trading Day (leave blank to chart all):", alpha_dates, key="alpha_date_filter")
-            # ----------------------------------------
+            if st.toggle("📈 Run Scaling Alpha Engine", key="run_scaling_alpha"):
+                POINT_VALUES = {
+                    'ES': 50, 'MES': 5, 'NQ': 20, 'MNQ': 2, 'RTY': 50, 'M2K': 5,
+                    'CL': 1000, 'MCL': 100, 'QM': 500, 'QG': 12.5, 'NG': 10000, 
+                    'GC': 100, 'MGC': 10, 'YM': 5, 'MYM': 0.5
+                }
+                
+                # --- NEW UI: Localized Scaling Filters ---
+                alpha_instruments = sorted(list(master_df['Instrument'].dropna().unique()))
+                selected_alpha_inst = st.multiselect("Filter Scaling Alpha by Instrument (leave blank to chart all):", alpha_instruments, key="alpha_inst_filter")
+                
+                alpha_dates = list(master_df['Date_str'].dropna().unique())[::-1]
+                selected_alpha_dates = st.multiselect("Filter Scaling Alpha by Trading Day (leave blank to chart all):", alpha_dates, key="alpha_date_filter")
+                # ----------------------------------------
 
-            alpha_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
-            
-            if selected_alpha_inst:
-                alpha_df = alpha_df[alpha_df['Instrument'].isin(selected_alpha_inst)]
-            if selected_alpha_dates:
-                alpha_df = alpha_df[alpha_df['Date_str'].isin(selected_alpha_dates)]
-            
-            # --- STRICT OVERLAP MATH ---
-            # Convert exit times to datetime for overlap comparison
-            alpha_df['Entry_DT'] = pd.to_datetime(alpha_df['Entry_Time'], errors='coerce')
-            alpha_df['Exit_DT'] = pd.to_datetime(alpha_df['Exit_Time'], errors='coerce')
-            
-            # Calculate the furthest exit time seen so far for a given day/instrument/direction
-            alpha_df['Max_Exit_So_Far'] = alpha_df.groupby(['Date_str', 'Instrument', 'trade_type'])['Exit_DT'].cummax().shift(1)
-            
-            # A new campaign starts ONLY if the current entry is AFTER the previous maximum exit
-            # (meaning no overlap), or if the instrument/direction/day changes.
-            condition = (alpha_df['Entry_DT'] > alpha_df['Max_Exit_So_Far']) | \
-                        (alpha_df['Instrument'] != alpha_df['Instrument'].shift(1)) | \
-                        (alpha_df['trade_type'] != alpha_df['trade_type'].shift(1)) | \
-                        (alpha_df['Date_str'] != alpha_df['Date_str'].shift(1))
-                        
-            alpha_df['Campaign_ID'] = condition.cumsum()
-            
-            campaigns = []
-            
-            for c_id, group in alpha_df.groupby('Campaign_ID'):
-                if len(group) > 1: # We ONLY evaluate true overlapping scale-ins
-                    actual_net = group['Net_PnL'].sum()
-                    true_position_size = group['Qty'].max() 
-                    base_comm = group['Commission'].sum()
-                    
-                    entries = group.sort_values('Entry_DT')
-                    first_entry = entries.iloc[0]['Entry_Price']
-                    final_exit = group.iloc[-1]['Exit_Price']
-                    instrument = group.iloc[0]['Instrument']
-                    t_type = group.iloc[0]['trade_type'].upper()
-                    
-                    # --- NEW MATH: Detect Averaging Down vs Pyramiding ---
-                    behavior = "Scale-Out Only"
-                    if len(entries['Entry_Time'].unique()) > 1: # They added size later
-                        if t_type == 'LONG':
-                            if (entries.iloc[1:]['Entry_Price'] < first_entry).any(): behavior = "Averaging Down"
-                            else: behavior = "Pyramiding"
-                        elif t_type == 'SHORT':
-                            if (entries.iloc[1:]['Entry_Price'] > first_entry).any(): behavior = "Averaging Down"
-                            else: behavior = "Pyramiding"
-                    # -----------------------------------------------------
-
-                    multiplier = 1.0
-                    for k in sorted(POINT_VALUES.keys(), key=len, reverse=True):
-                        if instrument.startswith(k):
-                            multiplier = POINT_VALUES[k]
-                            break
+                alpha_df = master_df.copy().sort_values(by='Datetime').reset_index(drop=True)
+                
+                if selected_alpha_inst:
+                    alpha_df = alpha_df[alpha_df['Instrument'].isin(selected_alpha_inst)]
+                if selected_alpha_dates:
+                    alpha_df = alpha_df[alpha_df['Date_str'].isin(selected_alpha_dates)]
+                
+                # --- STRICT OVERLAP MATH ---
+                # Convert exit times to datetime for overlap comparison
+                alpha_df['Entry_DT'] = pd.to_datetime(alpha_df['Entry_Time'], errors='coerce')
+                alpha_df['Exit_DT'] = pd.to_datetime(alpha_df['Exit_Time'], errors='coerce')
+                
+                # Calculate the furthest exit time seen so far for a given day/instrument/direction
+                alpha_df['Max_Exit_So_Far'] = alpha_df.groupby(['Date_str', 'Instrument', 'trade_type'])['Exit_DT'].cummax().shift(1)
+                
+                # A new campaign starts ONLY if the current entry is AFTER the previous maximum exit
+                # (meaning no overlap), or if the instrument/direction/day changes.
+                condition = (alpha_df['Entry_DT'] > alpha_df['Max_Exit_So_Far']) | \
+                            (alpha_df['Instrument'] != alpha_df['Instrument'].shift(1)) | \
+                            (alpha_df['trade_type'] != alpha_df['trade_type'].shift(1)) | \
+                            (alpha_df['Date_str'] != alpha_df['Date_str'].shift(1))
                             
-                    base_pt_diff = (final_exit - first_entry) if t_type == 'LONG' else (first_entry - final_exit)
-                    base_gross = base_pt_diff * true_position_size * multiplier
-                    base_net = base_gross - base_comm
-                    
-                    campaigns.append({
-                        'Campaign': f"{instrument} ({t_type}) @ {group.iloc[0]['Datetime'].strftime('%H:%M')} ({len(group)} legs)",
-                        'Actual Net': actual_net,
-                        'Baseline Net': base_net,
-                        'Scaling Alpha': actual_net - base_net,
-                        'Behavior': behavior
-                    })
+                alpha_df['Campaign_ID'] = condition.cumsum()
+                
+                campaigns = []
+                
+                for c_id, group in alpha_df.groupby('Campaign_ID'):
+                    if len(group) > 1: # We ONLY evaluate true overlapping scale-ins
+                        actual_net = group['Net_PnL'].sum()
+                        true_position_size = group['Qty'].max() 
+                        base_comm = group['Commission'].sum()
                         
-            if campaigns:
-                camp_df = pd.DataFrame(campaigns)
-                total_alpha = camp_df['Scaling Alpha'].sum()
-                avg_down_alpha = camp_df[camp_df['Behavior'] == 'Averaging Down']['Scaling Alpha'].sum()
-                pyr_alpha = camp_df[camp_df['Behavior'] == 'Pyramiding']['Scaling Alpha'].sum()
-                scale_out_alpha = camp_df[camp_df['Behavior'] == 'Scale-Out Only']['Scaling Alpha'].sum()
-                
-                col_a1, col_a2, col_a3, col_a4 = st.columns(4)
-                col_a1.metric("Total Scaling Alpha", f"${total_alpha:.2f}")
-                col_a2.metric("Alpha (Averaging Down)", f"${avg_down_alpha:.2f}", help="Money made/lost specifically when you added to losing positions.")
-                col_a3.metric("Alpha (Pyramiding)", f"${pyr_alpha:.2f}", help="Money made/lost specifically when you added to winning positions.")
-                col_a4.metric("Alpha (Scale-Out Only)", f"${scale_out_alpha:.2f}", help="Money made/lost when you entered full size and scaled out.")
-                
-                camp_df = camp_df.sort_values(by='Scaling Alpha').head(20) 
-                
-                fig_alpha = go.Figure()
-                fig_alpha.add_trace(go.Bar(x=camp_df['Campaign'], y=camp_df['Actual Net'], name='Actual Scaled P&L', marker_color='#26a69a'))
-                fig_alpha.add_trace(go.Bar(x=camp_df['Campaign'], y=camp_df['Baseline Net'], name='Baseline (1-Shot) P&L', marker_color='rgba(128,128,128,0.4)'))
-                
-                fig_alpha.update_layout(barmode='group', height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis=dict(tickprefix="$"))
-                st.plotly_chart(fig_alpha, use_container_width=True)
-            else:
-                st.info("Not enough scaled positions (multiple executions overlapping in time) to calculate Scaling Alpha.")
+                        entries = group.sort_values('Entry_DT')
+                        first_entry = entries.iloc[0]['Entry_Price']
+                        final_exit = group.iloc[-1]['Exit_Price']
+                        instrument = group.iloc[0]['Instrument']
+                        t_type = group.iloc[0]['trade_type'].upper()
+                        
+                        # --- NEW MATH: Detect Averaging Down vs Pyramiding ---
+                        behavior = "Scale-Out Only"
+                        if len(entries['Entry_Time'].unique()) > 1: # They added size later
+                            if t_type == 'LONG':
+                                if (entries.iloc[1:]['Entry_Price'] < first_entry).any(): behavior = "Averaging Down"
+                                else: behavior = "Pyramiding"
+                            elif t_type == 'SHORT':
+                                if (entries.iloc[1:]['Entry_Price'] > first_entry).any(): behavior = "Averaging Down"
+                                else: behavior = "Pyramiding"
+                        # -----------------------------------------------------
+
+                        multiplier = 1.0
+                        for k in sorted(POINT_VALUES.keys(), key=len, reverse=True):
+                            if instrument.startswith(k):
+                                multiplier = POINT_VALUES[k]
+                                break
+                                
+                        base_pt_diff = (final_exit - first_entry) if t_type == 'LONG' else (first_entry - final_exit)
+                        base_gross = base_pt_diff * true_position_size * multiplier
+                        base_net = base_gross - base_comm
+                        
+                        campaigns.append({
+                            'Campaign': f"{instrument} ({t_type}) @ {group.iloc[0]['Datetime'].strftime('%H:%M')} ({len(group)} legs)",
+                            'Actual Net': actual_net,
+                            'Baseline Net': base_net,
+                            'Scaling Alpha': actual_net - base_net,
+                            'Behavior': behavior
+                        })
+                            
+                if campaigns:
+                    camp_df = pd.DataFrame(campaigns)
+                    total_alpha = camp_df['Scaling Alpha'].sum()
+                    avg_down_alpha = camp_df[camp_df['Behavior'] == 'Averaging Down']['Scaling Alpha'].sum()
+                    pyr_alpha = camp_df[camp_df['Behavior'] == 'Pyramiding']['Scaling Alpha'].sum()
+                    scale_out_alpha = camp_df[camp_df['Behavior'] == 'Scale-Out Only']['Scaling Alpha'].sum()
+                    
+                    col_a1, col_a2, col_a3, col_a4 = st.columns(4)
+                    col_a1.metric("Total Scaling Alpha", f"${total_alpha:.2f}")
+                    col_a2.metric("Alpha (Averaging Down)", f"${avg_down_alpha:.2f}", help="Money made/lost specifically when you added to losing positions.")
+                    col_a3.metric("Alpha (Pyramiding)", f"${pyr_alpha:.2f}", help="Money made/lost specifically when you added to winning positions.")
+                    col_a4.metric("Alpha (Scale-Out Only)", f"${scale_out_alpha:.2f}", help="Money made/lost when you entered full size and scaled out.")
+                    
+                    camp_df = camp_df.sort_values(by='Scaling Alpha').head(20) 
+                    
+                    fig_alpha = go.Figure()
+                    fig_alpha.add_trace(go.Bar(x=camp_df['Campaign'], y=camp_df['Actual Net'], name='Actual Scaled P&L', marker_color='#26a69a'))
+                    fig_alpha.add_trace(go.Bar(x=camp_df['Campaign'], y=camp_df['Baseline Net'], name='Baseline (1-Shot) P&L', marker_color='rgba(128,128,128,0.4)'))
+                    
+                    fig_alpha.update_layout(barmode='group', height=400, plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', yaxis=dict(tickprefix="$"))
+                    st.plotly_chart(fig_alpha, use_container_width=True)
+                else:
+                    st.info("Not enough scaled positions (multiple executions overlapping in time) to calculate Scaling Alpha.")
             # ----------------------------------------
 
             # --- NEW UI: The Conviction Curve (Size-Induced Panic) ---
             st.markdown("---")
             st.subheader("9. The Conviction Curve (Size-Induced Panic)")
-            st.markdown("Plots your Average Exit Efficiency (MFE Capture Rate) against your Position Size. A steep drop-off exposes your psychological volume ceiling.")
             
             if st.toggle("📉 Run Conviction Curve Analysis", key="run_conviction"):
                 # --- NEW UI: Localized Conviction Filters ---
@@ -2139,10 +2140,74 @@ else:
                 else:
                     st.info("Log at least 6 winning trades to unlock the Stop-Loss Optimizer.")
             # -----------------------------------------------------
+
+            # --- NEW UI: The "First Blood" Anchor ---
+            st.markdown("---")
+            st.subheader("20. The \"First Blood\" Anchor (Session Catalyst Matrix)")
+            st.markdown("Measures how the outcome of your very first trade dictates the rest of your session. Exposes if a bad start mathematically guarantees a red day.")
+
+            if st.toggle("⚓ Run First Blood Analysis", key="run_first_blood"):
+
+                fb_df = master_df.dropna(subset=['Net_PnL']).copy().sort_values(by=['Date_str', 'Datetime'])
+
+                if not fb_df.empty:
+                    # Find the chronologically first trade of each day
+                    first_trades = fb_df.drop_duplicates(subset=['Date_str'], keep='first').copy()
+                    
+                    def categorize_first_trade(pnl):
+                        if pnl > 10.0: return 'Win'
+                        elif pnl < -10.0: return 'Loss'
+                        else: return 'Scratch'
+                        
+                    first_trades['First_Trade_Result'] = first_trades['Net_PnL'].apply(categorize_first_trade)
+
+                    # Calculate total daily PnL for the entire session
+                    daily_pnl = fb_df.groupby('Date_str')['Net_PnL'].sum().reset_index()
+                    daily_pnl.columns = ['Date_str', 'Total_Daily_PnL']
+
+                    # Merge the first trade result with the final session outcome
+                    fb_merged = pd.merge(first_trades[['Date_str', 'First_Trade_Result']], daily_pnl, on='Date_str')
+
+                    win_start_days = fb_merged[fb_merged['First_Trade_Result'] == 'Win']
+                    loss_start_days = fb_merged[fb_merged['First_Trade_Result'] == 'Loss']
+                    scratch_start_days = fb_merged[fb_merged['First_Trade_Result'] == 'Scratch']
+
+                    avg_day_pnl_win = win_start_days['Total_Daily_PnL'].mean() if len(win_start_days) > 0 else 0
+                    avg_day_pnl_loss = loss_start_days['Total_Daily_PnL'].mean() if len(loss_start_days) > 0 else 0
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    col_fb1, col_fb2 = st.columns(2)
+                    col_fb1.metric("Avg Final Daily P&L (When Trade #1 is a WIN)", f"${avg_day_pnl_win:.2f}")
+                    col_fb2.metric("Avg Final Daily P&L (When Trade #1 is a LOSS)", f"${avg_day_pnl_loss:.2f}", delta_color="inverse")
+
+                    # Plotly Box Chart to show the full range of session outcomes
+                    fig_fb = go.Figure()
+                    fig_fb.add_trace(go.Box(y=win_start_days['Total_Daily_PnL'], name='Sessions Starting w/ Win', marker_color='#26a69a', boxpoints='all', jitter=0.3, pointpos=-1.8))
+                    fig_fb.add_trace(go.Box(y=loss_start_days['Total_Daily_PnL'], name='Sessions Starting w/ Loss', marker_color='#ef5350', boxpoints='all', jitter=0.3, pointpos=-1.8))
+                    if not scratch_start_days.empty:
+                        fig_fb.add_trace(go.Box(y=scratch_start_days['Total_Daily_PnL'], name='Sessions Starting w/ Scratch', marker_color='#FFD700', boxpoints='all', jitter=0.3, pointpos=-1.8))
+
+                    fig_fb.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.5)")
+
+                    fig_fb.update_layout(
+                        title="Total Session Outcome Based on the First Trade of the Day",
+                        height=450,
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        yaxis=dict(title='Final Daily P&L ($)', tickprefix="$", gridcolor='rgba(128, 128, 128, 0.1)'),
+                        showlegend=False
+                    )
+                    st.plotly_chart(fig_fb, use_container_width=True)
+                    
+                    st.info("Look at the spread of the red dots versus the green dots. If the red box is dragged massively below the zero line, it proves that a single early loss permanently tilts your execution for the rest of the day.")
+
+                else:
+                    st.info("Not enough data to calculate First Blood metrics.")
+            # -----------------------------------------------------
             
             # --- NEW UI: Automated Edge Combinator ---
             st.markdown("---")
-            st.subheader("20. Automated Edge Combinator (A+ Setup Finder)")
+            st.subheader("21. Automated Edge Combinator (A+ Setup Finder)")
             st.markdown("Calculates the Expected Value (EV) of combining specific PA factors to mathematically reveal your highest probability setups.")
             
             if st.toggle("👑 Run Edge Combinator", key="run_edge"):
