@@ -17,7 +17,7 @@ if 'reset_trigger' not in st.session_state:
     st.session_state.reset_trigger = 0
 
 # --- Configuration & Setup ---
-st.set_page_config(page_title="Trading Journal Vault", layout="wide")
+st.set_page_config(page_title="MFFU Trading Journal Vault", layout="wide")
 
 st.sidebar.header("⚙️ Database Configuration")
 st.sidebar.markdown("Define the exact filename of your SQLite database to prevent Ghost Vaults.")
@@ -89,7 +89,8 @@ def init_db():
         '''CREATE TABLE IF NOT EXISTS weekly_history (week_range TEXT PRIMARY KEY, report_text TEXT, is_deleted INTEGER DEFAULT 0)''',
         '''CREATE TABLE IF NOT EXISTS monthly_enemy (id TEXT PRIMARY KEY, enemy TEXT, trading_effect TEXT, life_effect TEXT, action_plan TEXT, progress TEXT, w1_status TEXT, w1_how TEXT, w1_plan TEXT, w1_grade TEXT, w2_status TEXT, w2_how TEXT, w2_plan TEXT, w2_grade TEXT, w3_status TEXT, w3_how TEXT, w3_plan TEXT, w3_grade TEXT, w4_status TEXT, w4_how TEXT, w4_plan TEXT, w4_grade TEXT, w5_status TEXT, w5_how TEXT, w5_plan TEXT, w5_grade TEXT)''',
         '''CREATE TABLE IF NOT EXISTS monthly_enemy_history (month_range TEXT PRIMARY KEY, report_text TEXT, is_deleted INTEGER DEFAULT 0)''',
-        '''CREATE TABLE IF NOT EXISTS market_data (instrument TEXT, timestamp TEXT, open REAL, high REAL, low REAL, close REAL, is_deleted INTEGER DEFAULT 0, PRIMARY KEY (instrument, timestamp))'''
+        '''CREATE TABLE IF NOT EXISTS market_data (instrument TEXT, timestamp TEXT, open REAL, high REAL, low REAL, close REAL, is_deleted INTEGER DEFAULT 0, PRIMARY KEY (instrument, timestamp))''',
+        '''CREATE TABLE IF NOT EXISTS exposure_therapies (id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, topic TEXT, imagine TEXT, feel_phys TEXT, feel_emot TEXT, helped TEXT, followup TEXT, life TEXT, plan TEXT)'''
     ]
     for t in tables: cursor.execute(t)
 
@@ -123,7 +124,14 @@ def init_db():
         "ALTER TABLE weekly_goals ADD COLUMN tue_grade TEXT DEFAULT '-'",
         "ALTER TABLE weekly_goals ADD COLUMN wed_grade TEXT DEFAULT '-'",
         "ALTER TABLE weekly_goals ADD COLUMN thu_grade TEXT DEFAULT '-'",
-        "ALTER TABLE weekly_goals ADD COLUMN fri_grade TEXT DEFAULT '-'"
+        "ALTER TABLE weekly_goals ADD COLUMN fri_grade TEXT DEFAULT '-'",
+        
+        # --- NEW: Steenbarger Execution Checklist Columns ---
+        "ALTER TABLE journal_entries ADD COLUMN chk_ema INTEGER DEFAULT 0",
+        "ALTER TABLE journal_entries ADD COLUMN chk_touch INTEGER DEFAULT 0",
+        "ALTER TABLE journal_entries ADD COLUMN chk_context INTEGER DEFAULT 0",
+        "ALTER TABLE journal_entries ADD COLUMN chk_posture INTEGER DEFAULT 0",
+        "ALTER TABLE journal_entries ADD COLUMN chk_cooldown INTEGER DEFAULT 0"
     ]
     for alt in alterations:
         try: cursor.execute(alt)
@@ -306,7 +314,10 @@ def insert_market_data_to_db(df, instrument):
 @st.cache_data
 def load_all_trades():
     conn = sqlite3.connect(DB_FILE)
-    query = '''SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy, j.lesson_tags, j.confluence_tags FROM trades t LEFT JOIN journal_entries j ON t.trade_id = j.trade_id WHERE t.is_deleted = 0 OR t.is_deleted IS NULL'''
+    # --- UPDATED: Now fetches the checklist columns as well ---
+    query = '''SELECT t.*, j.notes, j.score, j.good_bad, j.improve, j.action_plan, j.strategy, j.lesson_tags, j.confluence_tags, 
+               j.chk_ema, j.chk_touch, j.chk_context, j.chk_posture, j.chk_cooldown 
+               FROM trades t LEFT JOIN journal_entries j ON t.trade_id = j.trade_id WHERE t.is_deleted = 0 OR t.is_deleted IS NULL'''
     df = pd.read_sql_query(query, conn)
     conn.close()
     
@@ -328,6 +339,11 @@ def load_all_trades():
         df['strategy'] = df['strategy'].fillna("Uncategorized")
         df['lesson_tags'] = df.get('lesson_tags', '').fillna("")
         df['confluence_tags'] = df.get('confluence_tags', '').fillna("")
+        
+        # Ensure checklist columns exist with defaults
+        for col in ['chk_ema', 'chk_touch', 'chk_context', 'chk_posture', 'chk_cooldown']:
+            df[col] = df.get(col, 0).fillna(0).astype(int)
+            
     return df
 
 @st.cache_data
@@ -429,9 +445,13 @@ def empty_recycle_bin_db():
     conn.commit()
     conn.close()
 
-def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str, conf_tags_str):
+# --- UPDATED: Now saves the checklist data straight into the vault ---
+def save_trade_note_to_db(trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str, conf_tags_str, chk_ema=0, chk_touch=0, chk_context=0, chk_posture=0, chk_cooldown=0):
     conn = sqlite3.connect(DB_FILE)
-    conn.execute('''REPLACE INTO journal_entries (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags, confluence_tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str, conf_tags_str))
+    conn.execute('''REPLACE INTO journal_entries 
+                    (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags, confluence_tags, chk_ema, chk_touch, chk_context, chk_posture, chk_cooldown) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
+                 (trade_id, notes, score, good_bad, improve, action_plan, strategy, lesson_tags_str, conf_tags_str, chk_ema, chk_touch, chk_context, chk_posture, chk_cooldown))
     conn.commit()
     conn.close()
     st.cache_data.clear()
@@ -524,23 +544,76 @@ def get_monthly_enemy_history():
     conn.close()
     return result
 
-def render_tradingview_chart(market_df, entry_time_str, exit_time_str, trade_type):
+def save_exposure_therapy(date, topic, imagine, feel_phys, feel_emot, helped, followup, life, plan):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''INSERT INTO exposure_therapies 
+                 (date, topic, imagine, feel_phys, feel_emot, helped, followup, life, plan) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
+              (date, topic, imagine, feel_phys, feel_emot, helped, followup, life, plan))
+    conn.commit()
+    conn.close()
+
+def get_exposure_therapies():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('SELECT * FROM exposure_therapies ORDER BY date DESC, id DESC')
+    data = c.fetchall()
+    conn.close()
+    return data
+
+def delete_exposure_therapy(t_id):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('DELETE FROM exposure_therapies WHERE id = ?', (t_id,))
+    conn.commit()
+    conn.close()
+
+def render_tradingview_chart(market_df, entry_time_str, exit_time_str, entry_price, exit_price, trade_type, timeframe="5min"):
+    market_df['Datetime'] = pd.to_datetime(market_df['Datetime'])
     market_df = market_df.drop_duplicates(subset=['Datetime']).sort_values(by='Datetime')
-    valid_times, candles = [], []
-    for _, row in market_df.iterrows():
+    
+    # Resample dynamically based on the timeframe requested
+    df_chart = market_df.set_index('Datetime').resample(timeframe).agg({
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last'
+    }).dropna().reset_index()
+
+    # Calculate the 21 EMA dynamically for the chosen timeframe
+    df_chart['ema_21'] = df_chart['close'].ewm(span=21, adjust=False).mean()
+
+    valid_times, candles, ema_data = [], [], []
+    for _, row in df_chart.iterrows():
         unix_time = int(row['Datetime'].timestamp())
         valid_times.append(unix_time)
         candles.append({"time": unix_time, "open": row['open'], "high": row['high'], "low": row['low'], "close": row['close']})
         
+        if not pd.isna(row['ema_21']):
+            ema_data.append({"time": unix_time, "value": row['ema_21']})
+            
     markers = []
+    in_color, out_color = "#2196F3", "#E91E63"
+    
     if entry_time_str != 'N/A' and exit_time_str != 'N/A' and valid_times:
         dt_in = pd.to_datetime(entry_time_str).replace(tzinfo=None)
         dt_out = pd.to_datetime(exit_time_str).replace(tzinfo=None)
-        unix_in, unix_out = int(dt_in.timestamp()), int(dt_out.timestamp())
-        if unix_in not in valid_times: unix_in = min(valid_times, key=lambda x: abs(x - unix_in))
-        if unix_out not in valid_times: unix_out = min(valid_times, key=lambda x: abs(x - unix_out))
-        in_color = "#2196F3" if trade_type == "Long" else "#E91E63"
-        out_color = "#E91E63" if trade_type == "Long" else "#2196F3"
+        
+        # Floor to the exact timeframe bucket (1min or 5min)
+        unix_in = int(dt_in.floor(timeframe).timestamp())
+        unix_out = int(dt_out.floor(timeframe).timestamp())
+        
+        if unix_in not in valid_times: 
+            past_in = [t for t in valid_times if t <= unix_in]
+            unix_in = max(past_in) if past_in else min(valid_times, key=lambda x: abs(x - unix_in))
+            
+        if unix_out not in valid_times: 
+            past_out = [t for t in valid_times if t <= unix_out]
+            unix_out = max(past_out) if past_out else min(valid_times, key=lambda x: abs(x - unix_out))
+            
+        in_color = "#2196F3" if trade_type.upper() == "LONG" else "#E91E63"
+        out_color = "#E91E63" if trade_type.upper() == "LONG" else "#2196F3"
         raw_markers = [{"time": unix_in, "position": "belowBar", "color": in_color, "shape": "arrowUp", "text": "In"}, {"time": unix_out, "position": "aboveBar", "color": out_color, "shape": "arrowDown", "text": "Out"}]
         markers = sorted(raw_markers, key=lambda x: x["time"])
         
@@ -555,10 +628,19 @@ def render_tradingview_chart(market_df, entry_time_str, exit_time_str, trade_typ
                 grid: {{ vertLines: {{ color: '#2b2b43' }}, horzLines: {{ color: '#2b2b43' }} }},
                 timeScale: {{ timeVisible: true, secondsVisible: false }},
             }});
+            
             const candleSeries = chart.addCandlestickSeries({{upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350'}});
             candleSeries.setData({json.dumps(candles)});
+            
+            const emaSeries = chart.addLineSeries({{ color: '#FFFFFF', lineWidth: 1, crosshairMarkerVisible: false }});
+            emaSeries.setData({json.dumps(ema_data)});
+            
+            candleSeries.createPriceLine({{ price: {entry_price}, color: '{in_color}', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'IN' }});
+            candleSeries.createPriceLine({{ price: {exit_price}, color: '{out_color}', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'OUT' }});
+            
             const markers = {json.dumps(markers)};
             if (markers.length > 0) candleSeries.setMarkers(markers);
+            
             chart.timeScale().fitContent();
         }} catch (error) {{ document.getElementById('tvchart').innerHTML = "<div style='color:red; font-weight:bold; padding:20px; border:1px solid red;'>Chart Rendering Error: " + error.message + "</div>"; }}
     </script>
@@ -783,6 +865,58 @@ with st.expander("🗄️ Archive Monthly Enemy to History", expanded=False):
 
 st.divider()
 
+# --- NEW: EXPOSURE THERAPY JOURNAL ---
+with st.expander("🧠 Exposure Therapy Journal", expanded=False):
+    st.markdown("### 📝 Record New Therapy Session")
+    with st.form("new_therapy_form"):
+        t_date = st.date_input("Date of the therapy")
+        t_topic = st.text_input("Topic of the therapy")
+        t_imagine = st.text_area("What did I imagine?", height=100)
+        
+        col_t1, col_t2 = st.columns(2)
+        with col_t1:
+            t_feel_phys = st.text_area("What did I feel? (Physical sensation)", height=100)
+        with col_t2:
+            t_feel_emot = st.text_area("What did I feel? (Emotional sensation)", height=100)
+            
+        t_helped = st.text_area("What do I think it helped me with?", height=100)
+        t_followup = st.text_area("How I plan to follow up on this therapy and how I think it will affect my trading?", height=100)
+        t_life = st.text_area("How I think it will affect my real life?", height=100)
+        t_plan = st.text_area("What is the plan moving forward on implementing the lessons I learned from it?", height=100)
+        
+        submit_therapy = st.form_submit_button("💾 Save Therapy Session to Vault")
+        if submit_therapy:
+            if t_topic:
+                save_exposure_therapy(t_date.strftime("%Y-%m-%d"), t_topic, t_imagine, t_feel_phys, t_feel_emot, t_helped, t_followup, t_life, t_plan)
+                st.success("Therapy session saved successfully!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("⚠️ Please enter a Topic before saving.")
+
+    st.markdown("---")
+    st.markdown("### 🗄️ Past Therapy Sessions")
+    past_therapies = get_exposure_therapies()
+    if not past_therapies:
+        st.info("No exposure therapies recorded yet. When you do the work, log it here.")
+    else:
+        for therapy in past_therapies:
+            t_id, t_d, t_top, t_img, t_fp, t_fe, t_h, t_fu, t_l, t_p = therapy
+            with st.expander(f"🗓️ {t_d} | {t_top}", expanded=False):
+                st.markdown(f"**What did I imagine?**\n\n{t_img}")
+                st.markdown(f"**Physical Feeling:**\n\n{t_fp}")
+                st.markdown(f"**Emotional Feeling:**\n\n{t_fe}")
+                st.markdown(f"**What do I think it helped me with?**\n\n{t_h}")
+                st.markdown(f"**Follow up & Trading Effect:**\n\n{t_fu}")
+                st.markdown(f"**Life Effect:**\n\n{t_l}")
+                st.markdown(f"**Plan moving forward:**\n\n{t_p}")
+                
+                if st.button(f"🗑️ Delete this session", key=f"del_ther_{t_id}"):
+                    delete_exposure_therapy(t_id)
+                    st.rerun()
+
+st.divider()
+
 with st.expander("📜 My Trading Rules & Master Plan", expanded=False):
     st.markdown("### Core Trading Rules")
     rule_data = get_trading_rules()
@@ -831,7 +965,8 @@ else:
                 return any(t in row_tags for t in tags_to_find)
             master_df = master_df[master_df['confluence_tags'].apply(lambda x: has_confluence(x, selected_confluences))]
     with col_filt4:
-        min_score, max_score = st.slider("Filter by Execution Score", 0, 10, (0, 10))
+        # --- UPDATED: Steenbarger Execution Score Filter (-5 to +5) ---
+        min_score, max_score = st.slider("Filter by Execution Score", -5, 5, (-5, 5))
         master_df = master_df[(master_df['score'] >= min_score) & (master_df['score'] <= max_score)]
             
     st.divider()
@@ -839,6 +974,59 @@ else:
     if master_df.empty:
         st.warning("No trades match your current filters.")
     else:
+        # --- NEW: THE DISCIPLINE ENGINE & STREAK TRACKER ---
+        st.header("🧠 The Discipline Engine")
+        
+        # Calculate daily average execution scores for the streak
+        streak_df = master_df.groupby('Date_str').agg({
+            'Datetime': 'first',
+            'score': 'mean',
+            'Net_PnL': 'sum'
+        }).sort_values('Datetime').reset_index()
+        
+        current_exec_streak = 0
+        max_exec_streak = 0
+        
+        # Calculate the perfect (+5) streak
+        for sc in streak_df['score']:
+            if sc == 5.0:
+                current_exec_streak += 1
+                if current_exec_streak > max_exec_streak: max_exec_streak = current_exec_streak
+            else:
+                current_exec_streak = 0
+                
+        col_s1, col_s2, col_s3 = st.columns(3)
+        col_s1.metric("🔥 Current Perfect Execution Streak", f"{current_exec_streak} Days")
+        col_s2.metric("🏆 Longest Perfect Execution Streak", f"{max_exec_streak} Days")
+        
+        # Average Execution Score over the last 10 trading days
+        recent_10_score = streak_df['score'].tail(10).mean() if len(streak_df) > 0 else 0.0
+        col_s3.metric("Recent Discipline (Last 10 Days)", f"{recent_10_score:.1f} / 5.0")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Color code the discipline chart: Green for +5, Yellow for >0, Red for negatives
+        streak_df['color'] = ['#26a69a' if s == 5.0 else '#ffca28' if s > 0 else '#ef5350' for s in streak_df['score']]
+        
+        fig_disc = go.Figure(data=[go.Bar(
+            x=streak_df['Date_str'], 
+            y=streak_df['score'], 
+            marker_color=streak_df['color'],
+            text=[f"{s:.1f}" for s in streak_df['score']],
+            textposition='auto'
+        )])
+        
+        fig_disc.update_layout(
+            title="Daily Average Execution Score (Process Over Outcome)",
+            height=300, 
+            margin=dict(l=0, r=0, t=30, b=0), 
+            plot_bgcolor='rgba(0,0,0,0)', 
+            paper_bgcolor='rgba(0,0,0,0)', 
+            yaxis=dict(title='Execution Score', range=[-5.5, 5.5], tickvals=[-5, -3, 0, 3, 5])
+        )
+        st.plotly_chart(fig_disc, use_container_width=True)
+        st.divider()
+        
         st.header("Historical Overview & Equity Curve")
         
         master_df = master_df.sort_values(by='Datetime').reset_index(drop=True)
@@ -955,6 +1143,32 @@ else:
                 win_secs = wins['Duration'].apply(parse_duration_to_seconds).mean() if not wins.empty else 0
                 loss_secs = losses['Duration'].apply(parse_duration_to_seconds).mean() if not losses.empty else 0
                 
+                # --- NEW: Calculate Avg MFE, MAE, and Exec Score per Strategy ---
+                strat_mfe_sum = 0
+                strat_mae_sum = 0
+                strat_mfe_count = 0
+                
+                for _, row in strat_df.iterrows():
+                    try:
+                        m_mfe, m_mae = calculate_mae_mfe(row['Instrument'], row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
+                        if m_mfe != "N/A" and m_mae != "N/A":
+                            strat_mfe_sum += float(m_mfe)
+                            strat_mae_sum += float(m_mae)
+                            strat_mfe_count += 1
+                    except:
+                        pass
+                
+                avg_mfe = strat_mfe_sum / strat_mfe_count if strat_mfe_count > 0 else 0.0
+                avg_mae = strat_mae_sum / strat_mfe_count if strat_mfe_count > 0 else 0.0
+                
+                mfe_str = f"+{avg_mfe:.2f} pts" if strat_mfe_count > 0 else "N/A"
+                mae_str = f"-{avg_mae:.2f} pts" if strat_mfe_count > 0 else "N/A"
+                
+                # Calculate Strategy Execution Score
+                avg_strat_score = strat_df['score'].mean() if 'score' in strat_df.columns else 0.0
+                score_color = "#26a69a" if avg_strat_score > 0 else "#ef5350"
+                # ---------------------------------------------------
+                
                 st.metric(f"{strat}", f"{fmt_dollar(expectancy)} / trade", f"{len(strat_df)} Trades")
                 st.markdown(f"""
                 <div style="font-size:0.9em; line-height:1.5;">
@@ -963,7 +1177,10 @@ else:
                 <b>Best Trade:</b> {fmt_dollar(best_t)}<br>
                 <b>Worst Trade:</b> {fmt_dollar(worst_t)}<br>
                 <b>Avg Dur (W):</b> {format_seconds_to_duration(win_secs)}<br>
-                <b>Avg Dur (L):</b> {format_seconds_to_duration(loss_secs)}
+                <b>Avg Dur (L):</b> {format_seconds_to_duration(loss_secs)}<br>
+                <b>Avg MFE:</b> <span style="color:#26a69a;">{mfe_str}</span><br>
+                <b>Avg MAE:</b> <span style="color:#ef5350;">{mae_str}</span><br>
+                <b>Avg Exec Score:</b> <span style="color:{score_color}; font-weight:bold;">{avg_strat_score:.1f} / 5</span>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1327,7 +1544,7 @@ else:
 
             # --- NEW UI: The Runner Simulator ---
             st.markdown("---")
-            st.subheader("10. The \"Runner\" Simulator (Partial Exit Optimizer)")            
+            st.subheader("10. The Monte Carlo Risk Simulator (Future Path Projections)")            
             if st.toggle("🧪 Run Monte Carlo Simulator", key="run_mc"):
                 mc_df = master_df.dropna(subset=['Net_PnL'])
                 if len(mc_df) >= 10:
@@ -1370,6 +1587,86 @@ else:
                         st.plotly_chart(fig_mc, use_container_width=True)
                 else:
                     st.info("Log at least 10 valid trades to unlock the Monte Carlo Simulator.")
+# --- NEW UI: The Runner Simulator (Section 11) ---
+            st.markdown("---")
+            st.subheader("11. The \"Runner\" Simulator (Partial Exit Optimizer)")
+            st.markdown("Simulates your '80/20 Latch-Lock' Protocol. Discover mathematically if leaving a runner at breakeven actually increases your edge, and exactly how often it needs to hit a macro trend to be profitable.")
+            
+            if st.toggle("🏃 Run Partial Exit Simulation", key="run_runner"):
+                run_df = master_df.dropna(subset=['Net_PnL']).copy()
+                
+                if len(run_df[run_df['Net_PnL'] > 0]) >= 5:
+                    col_r1, col_r2 = st.columns([1, 2.5])
+                    with col_r1:
+                        st.markdown("**Simulation Parameters**")
+                        runner_pct = st.slider("Runner Size (%)", min_value=10, max_value=50, value=20, step=5, help="Percentage of the position left to run.")
+                        runner_hit_rate = st.slider("Runner Trend Capture Rate (%)", min_value=5, max_value=50, value=25, step=1, help="How often does the runner catch a macro trend vs coming back to stop you out at breakeven ($0)?")
+                        runner_mult = st.slider("Macro Trend Multiplier", min_value=1.5, max_value=5.0, value=3.0, step=0.1, help="When the runner hits, how many times bigger is it than your initial scalp target?")
+                        
+                        # Simulation Engine
+                        sim_pnls = []
+                        for _, row in run_df.iterrows():
+                            actual_pnl = row['Net_PnL']
+                            if actual_pnl <= 0:
+                                # Losers stay losers. The security guard was paid.
+                                sim_pnls.append(actual_pnl)
+                            else:
+                                # Winners: Split into Scalp and Runner
+                                scalp_size = 1.0 - (runner_pct / 100.0)
+                                scalp_pnl = actual_pnl * scalp_size
+                                
+                                # Does the runner hit the macro trend or come back to breakeven?
+                                if np.random.rand() <= (runner_hit_rate / 100.0):
+                                    # Hit the macro trend!
+                                    runner_pnl = (actual_pnl * (runner_pct / 100.0)) * runner_mult
+                                else:
+                                    # Stopped out at breakeven
+                                    runner_pnl = 0.0
+                                    
+                                sim_pnls.append(scalp_pnl + runner_pnl)
+                                
+                        run_df['Simulated_Runner_PnL'] = sim_pnls
+                        run_df['Actual_Cum_PnL'] = run_df['Net_PnL'].cumsum()
+                        run_df['Sim_Cum_PnL'] = run_df['Simulated_Runner_PnL'].cumsum()
+                        
+                        actual_total = run_df['Net_PnL'].sum()
+                        sim_total = run_df['Simulated_Runner_PnL'].sum()
+                        edge_difference = sim_total - actual_total
+                        
+                        st.markdown("---")
+                        if edge_difference > 0:
+                            st.metric("Simulated P&L vs Actual", f"${sim_total:.2f}", f"+${edge_difference:.2f} (Runner is Profitable)")
+                        else:
+                            st.metric("Simulated P&L vs Actual", f"${sim_total:.2f}", f"-${abs(edge_difference):.2f} (Runner Bleeds Edge)")
+                            
+                        st.caption("If this number is negative, your actual 'all-in, all-out' scalping edge is mathematically superior to leaving a runner under these parameters.")
+                        
+                    with col_r2:
+                        fig_run = go.Figure()
+                        
+                        fig_run.add_trace(go.Scatter(
+                            x=run_df.index, y=run_df['Actual_Cum_PnL'], 
+                            mode='lines', line=dict(width=3, color='#9e9e9e'), 
+                            name='Actual Equity Curve (All-In, All-Out)'
+                        ))
+                        
+                        sim_color = '#26a69a' if sim_total >= actual_total else '#ef5350'
+                        fig_run.add_trace(go.Scatter(
+                            x=run_df.index, y=run_df['Sim_Cum_PnL'], 
+                            mode='lines', line=dict(width=3, color=sim_color), 
+                            name=f'Simulated Equity Curve ({runner_pct}% Runner)'
+                        ))
+                        
+                        fig_run.update_layout(
+                            height=400, margin=dict(l=0, r=0, t=10, b=0), 
+                            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', 
+                            xaxis=dict(title='Trade Number'), 
+                            yaxis=dict(title='Cumulative Net P&L ($)', tickprefix="$"),
+                            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)")
+                        )
+                        st.plotly_chart(fig_run, use_container_width=True)
+                else:
+                    st.info("Log at least 5 winning trades to unlock the Runner Simulator.")
                     
             # --- NEW UI: The Drawdown Behavior Matrix ---
             st.markdown("---")
@@ -2441,16 +2738,23 @@ else:
                         if st.checkbox("📈 Load Interactive TradingView Chart", key=f"show_chart_vault_{v_row['trade_id']}"):
                             try:
                                 trade_dt = pd.to_datetime(v_row['Timestamp'])
-                                start_time, end_time = trade_dt - timedelta(hours=16), trade_dt + timedelta(hours=16)
+                                
+                                # --- UPDATED: Now pulling 3 full days before and 3 full days after ---
+                                start_time, end_time = trade_dt - timedelta(days=3), trade_dt + timedelta(days=3)
+                                # ---------------------------------------------------------------------
+                                
                                 market_df = get_market_data(v_row['Instrument'], start_time, end_time)
                                 if not market_df.empty:
-                                    st.markdown("### 📊 TradingView Interactive Chart")
+                                    st.markdown("### 📊 TradingView Interactive Chart (5-Min)")
                                     html_chart = render_tradingview_chart(market_df, v_row['Entry_Time'], v_row['Exit_Time'], v_row.get('trade_type', 'Unknown'))
                                     components.html(html_chart, height=450)
-                                else: st.warning("No market data available for this 32-hour window.")
-                            except: pass 
+                                else: 
+                                    st.warning("No market data available for this 6-day window.")
+                            except: 
+                                pass
 
         st.divider()
+
 
         st.header("📅 Trading Calendar")
         master_df['Month_Year'] = master_df['Datetime'].dt.strftime('%B %Y')
@@ -2493,228 +2797,267 @@ else:
                         
         st.divider()
 
-        st.header("Daily Reviews & Trade Log")
-        all_unique_dates = list(master_df['Date_str'].unique())
-        
-        col_view1, col_view2, col_view3, col_view4 = st.columns(4)
-        with col_view1: view_mode = st.selectbox("Trade Log View Range", ["Show Most Recent 3 Days", "Show Specific Date", "Show Specific Month"], index=1)
-        with col_view2:
-            if view_mode == "Show Specific Date": selected_review_date = st.selectbox("Select Exact Date to Audit", all_unique_dates[::-1])
-            elif view_mode == "Show Specific Month": selected_review_month = st.selectbox("Select Exact Month to Audit", list(master_df['Month_Year'].unique())[::-1])
-            else: st.empty() 
-        with col_view3: outcome_filter = st.selectbox("Filter by Outcome", ["All Trades", "Profitable Only (Gross > $0)", "Losing Only (Gross <= $0)"])
-        with col_view4: sort_order = st.selectbox("Sort Trades By", ["Chronological (Time)", "Highest Profit First", "Biggest Loss First"])
-            
-        dates_to_show = []
-        if view_mode == "Show Most Recent 3 Days":
-            current_date = datetime.now().date()
-            valid_df = master_df[master_df['Datetime'].dt.date <= current_date]
-            dates_to_show = list(valid_df['Date_str'].unique())[::-1][:3] if not valid_df.empty else all_unique_dates[::-1][:3]
-        elif view_mode == "Show Specific Date": dates_to_show = [selected_review_date]
-        elif view_mode == "Show Specific Month":
-            dates_to_show = list(master_df[master_df['Month_Year'] == selected_review_month]['Date_str'].unique())[::-1]
-            if not dates_to_show: st.info(f"No trades found in {selected_review_month} to display.")
+st.header("Daily Reviews & Trade Log")
 
-        for date_str in dates_to_show:
-            daily_df = master_df[master_df['Date_str'] == date_str].copy()
+all_unique_dates = list(master_df['Date_str'].unique())
+
+col_view1, col_view2, col_view3, col_view4 = st.columns(4)
+with col_view1: view_mode = st.selectbox("Trade Log View Range", ["Show Most Recent 3 Days", "Show Specific Date", "Show Specific Month"], index=1, key="main_view_mode")
+with col_view2:
+    if view_mode == "Show Specific Date": selected_review_date = st.selectbox("Select Exact Date to Audit", all_unique_dates[::-1], key="main_date_sel")
+    elif view_mode == "Show Specific Month": selected_review_month = st.selectbox("Select Exact Month to Audit", list(master_df['Month_Year'].unique())[::-1], key="main_month_sel")
+    else: st.empty() 
+with col_view3: outcome_filter = st.selectbox("Filter by Outcome", ["All Trades", "Profitable Only (Gross > $0)", "Losing Only (Gross <= $0)"], key="main_outcome_sel")
+with col_view4: sort_order = st.selectbox("Sort Trades By", ["Chronological (Time)", "Highest Profit First", "Biggest Loss First"], key="main_sort_sel")
+    
+dates_to_show = []
+if view_mode == "Show Most Recent 3 Days":
+    current_date = datetime.now().date()
+    valid_df = master_df[master_df['Datetime'].dt.date <= current_date]
+    dates_to_show = list(valid_df['Date_str'].unique())[::-1][:3] if not valid_df.empty else all_unique_dates[::-1][:3]
+elif view_mode == "Show Specific Date": dates_to_show = [selected_review_date]
+elif view_mode == "Show Specific Month":
+    dates_to_show = list(master_df[master_df['Month_Year'] == selected_review_month]['Date_str'].unique())[::-1]
+    if not dates_to_show: st.info(f"No trades found in {selected_review_month} to display.")
+
+# Failsafe to mathematically prevent duplicate days from rendering
+dates_to_show = list(dict.fromkeys(dates_to_show))
+
+for date_str in dates_to_show:
+    daily_df = master_df[master_df['Date_str'] == date_str].copy()
+    
+    daily_df = daily_df.sort_values(by='Datetime', ascending=True).reset_index(drop=True)
+    daily_df['PnL_So_Far'] = daily_df['Net_PnL'].cumsum().shift(1).fillna(0.0)
+    
+    d_win_streak, d_max_win_streak = 0, 0
+    d_loss_streak, d_max_loss_streak = 0, 0
+    
+    for pnl in daily_df['Net_PnL']:
+        if pnl > 0:
+            d_win_streak += 1
+            d_loss_streak = 0
+            if d_win_streak > d_max_win_streak: d_max_win_streak = d_win_streak
+        elif pnl < 0:
+            d_loss_streak += 1
+            d_win_streak = 0
+            if d_loss_streak > d_max_loss_streak: d_max_loss_streak = d_loss_streak
             
-            daily_df = daily_df.sort_values(by='Datetime', ascending=True).reset_index(drop=True)
-            daily_df['PnL_So_Far'] = daily_df['Net_PnL'].cumsum().shift(1).fillna(0.0)
+    daily_avg_pnl = daily_df['Net_PnL'].mean() if len(daily_df) > 0 else 0.0
+    
+    daily_df['Daily_Cum_PnL'] = daily_df['Net_PnL'].cumsum()
+    daily_df['Daily_Peak'] = daily_df['Daily_Cum_PnL'].cummax().clip(lower=0.0)
+    daily_df['Daily_Drawdown'] = daily_df['Daily_Cum_PnL'] - daily_df['Daily_Peak']
+    daily_max_drawdown = daily_df['Daily_Drawdown'].min() if len(daily_df) > 0 else 0.0
+    
+    daily_longs = daily_df[daily_df['trade_type'].str.upper() == 'LONG']
+    daily_shorts = daily_df[daily_df['trade_type'].str.upper() == 'SHORT']
+    
+    daily_long_wins = len(daily_longs[daily_longs['Net_PnL'] > 0])
+    daily_short_wins = len(daily_shorts[daily_shorts['Net_PnL'] > 0])
+    
+    daily_long_pnl = daily_longs['Net_PnL'].sum()
+    daily_short_pnl = daily_shorts['Net_PnL'].sum()
+    
+    daily_gross = daily_df['P&L'].sum()
+    daily_comm = daily_df['Commission'].sum()
+    daily_net = daily_df['Net_PnL'].sum()
+    daily_gross_profit = daily_df[daily_df['P&L'] > 0]['P&L'].sum()
+    daily_gross_loss = abs(daily_df[daily_df['P&L'] < 0]['P&L'].sum())
+    daily_pf = "∞" if daily_gross_loss == 0 and daily_gross_profit > 0 else "0.00" if daily_gross_loss == 0 else f"{(daily_gross_profit / daily_gross_loss):.2f}"
+    
+    daily_total_trades = len(daily_df)
+    daily_win_count = len(daily_df[daily_df['P&L'] > 0])
+    daily_loss_count = len(daily_df[daily_df['P&L'] <= 0])
+    daily_wr = f"{(len(daily_df[daily_df['Net_PnL'] > 0]) / daily_total_trades * 100):.0f}%" if daily_total_trades > 0 else "0%"
+    
+    daily_winning_trades = daily_df[daily_df['Net_PnL'] > 0]
+    daily_losing_trades = daily_df[daily_df['Net_PnL'] < 0]
+    daily_max_win = daily_winning_trades['Net_PnL'].max() if not daily_winning_trades.empty else 0.0
+    daily_max_loss = daily_losing_trades['Net_PnL'].min() if not daily_losing_trades.empty else 0.0
+    
+    day_color = "🟢" if daily_net >= 0 else "🔴"
+    
+    day_title = f"{day_color} {date_str} | Net: \${daily_net:.2f} | WR: {daily_wr} | Best: +\${daily_max_win:.2f} | Worst: -\${abs(daily_max_loss):.2f} | {daily_total_trades} Trades"
+    
+    with st.expander(day_title, expanded=False):
+        st.markdown("### 🎯 Daily Pre-Market & Post-Market Routine")
+        col_goal, col_reflection = st.columns(2)
+        existing_goal, existing_reflection = get_daily_note_from_db(date_str)
+        with col_goal: daily_goal = st.text_area("Pre-Market Goal (What is your focus today?):", value=existing_goal, key=f"goal_{date_str}", height=150)
+        with col_reflection: daily_reflection = st.text_area("Post-Market Reflection (Did you execute on your goal?):", value=existing_reflection, key=f"ref_{date_str}", height=150)
+        if st.button("Save Daily Routine", key=f"btn_daily_{date_str}"):
+            save_daily_note_to_db(date_str, daily_goal, daily_reflection)
+            st.success("Daily routine saved successfully.")
+        
+        st.divider()
+        st.markdown("### 🧠 Intraday Psychological Stress & Bias")
+        
+        # Calculate daily average execution score
+        daily_avg_score = daily_df['score'].mean() if 'score' in daily_df.columns and len(daily_df) > 0 else 0.0
+        
+        col_d1, col_d2, col_d3, col_d4, col_d5_score = st.columns(5)
+        col_d1.metric("Intraday Max Cons. Wins", f"{d_max_win_streak}")
+        col_d2.metric("Intraday Max Cons. Losses", f"{d_max_loss_streak}")
+        col_d3.metric("Intraday Max Drawdown", f"-${abs(daily_max_drawdown):.2f}")
+        col_d4.metric("Daily Avg Trade P&L", f"${daily_avg_pnl:.2f}" if daily_avg_pnl >= 0 else f"-${abs(daily_avg_pnl):.2f}")
+        col_d5_score.metric("Avg Exec Score", f"{daily_avg_score:.1f} / 5")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_d5, col_d6, col_d7, col_d8 = st.columns(4)
+        col_d5.metric("Long Trades Won", f"{daily_long_wins} / {len(daily_longs)}")
+        col_d6.metric("Short Trades Won", f"{daily_short_wins} / {len(daily_shorts)}")
+        col_d7.metric("Net Long P&L", f"${daily_long_pnl:.2f}" if daily_long_pnl >= 0 else f"-${abs(daily_long_pnl):.2f}")
+        col_d8.metric("Net Short P&L", f"${daily_short_pnl:.2f}" if daily_short_pnl >= 0 else f"-${abs(daily_short_pnl):.2f}")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("**📊 Average Heat & Opportunity (MFE/MAE) by Instrument**")
+        
+        inst_stats = {}
+        for _, row in daily_df.iterrows():
+            inst = row['Instrument']
+            m_mfe, m_mae = calculate_mae_mfe(inst, row['Entry_Time'], row['Exit_Time'], row['Entry_Price'], row.get('trade_type', 'Unknown'))
+            if m_mfe != "N/A" and m_mae != "N/A":
+                if inst not in inst_stats:
+                    inst_stats[inst] = {'mfe_sum': 0, 'mae_sum': 0, 'count': 0}
+                inst_stats[inst]['mfe_sum'] += m_mfe
+                inst_stats[inst]['mae_sum'] += m_mae
+                inst_stats[inst]['count'] += 1
+        
+        if inst_stats:
+            inst_cols = st.columns(len(inst_stats))
+            for i, (inst, stats) in enumerate(inst_stats.items()):
+                avg_mfe = stats['mfe_sum'] / stats['count']
+                avg_mae = stats['mae_sum'] / stats['count']
+                with inst_cols[i]:
+                    st.info(f"**{inst}** \n🟢 Avg MFE: +{avg_mfe:.2f} pts  \n🔴 Avg MAE: -{avg_mae:.2f} pts")
+        else:
+            st.caption("MFE/MAE market data not available for this session.")
+        
+        st.divider()
+        
+        st.markdown("### 📊 Trade Executions")
+        
+        display_df = daily_df.copy()
+        if outcome_filter == "Profitable Only (Gross > $0)": display_df = display_df[display_df['P&L'] > 0]
+        elif outcome_filter == "Losing Only (Gross <= $0)": display_df = display_df[display_df['P&L'] <= 0]
             
-            d_win_streak, d_max_win_streak = 0, 0
-            d_loss_streak, d_max_loss_streak = 0, 0
+        if sort_order == "Highest Profit First": display_df = display_df.sort_values(by='P&L', ascending=False)
+        elif sort_order == "Biggest Loss First": display_df = display_df.sort_values(by='P&L', ascending=True)
+        else: display_df = display_df.sort_values(by='Datetime', ascending=True)
             
-            for pnl in daily_df['Net_PnL']:
-                if pnl > 0:
-                    d_win_streak += 1
-                    d_loss_streak = 0
-                    if d_win_streak > d_max_win_streak: d_max_win_streak = d_win_streak
-                elif pnl < 0:
-                    d_loss_streak += 1
-                    d_win_streak = 0
-                    if d_loss_streak > d_max_loss_streak: d_max_loss_streak = d_loss_streak
+        if display_df.empty: st.info("No trades match your current filter settings for this specific day.")
+        
+        if not display_df.empty:
+            with st.expander("⚡ Bulk Edit Scaled Positions (Group Review)", expanded=False):
+                st.markdown("Select multiple executions below to treat them as a single position. The strategy, tags, notes, and screenshot you provide here will be instantly applied to all selected trades simultaneously.")
+                
+                trade_map = {}
+                for _, row in display_df.iterrows():
+                    label = f"{row['trade_type'].upper()} {row['Instrument']} @ {row['Timestamp']} | In: {row['Entry_Price']} | Out: {row['Exit_Price']} | Net: ${row['Net_PnL']:.2f} (Qty: {row['Qty']})"
+                    trade_map[label] = row['trade_id']
                     
-            daily_avg_pnl = daily_df['Net_PnL'].mean() if len(daily_df) > 0 else 0.0
-            
-            daily_df['Daily_Cum_PnL'] = daily_df['Net_PnL'].cumsum()
-            daily_df['Daily_Peak'] = daily_df['Daily_Cum_PnL'].cummax().clip(lower=0.0)
-            daily_df['Daily_Drawdown'] = daily_df['Daily_Cum_PnL'] - daily_df['Daily_Peak']
-            daily_max_drawdown = daily_df['Daily_Drawdown'].min() if len(daily_df) > 0 else 0.0
-            
-            daily_longs = daily_df[daily_df['trade_type'].str.upper() == 'LONG']
-            daily_shorts = daily_df[daily_df['trade_type'].str.upper() == 'SHORT']
-            
-            daily_long_wins = len(daily_longs[daily_longs['Net_PnL'] > 0])
-            daily_short_wins = len(daily_shorts[daily_shorts['Net_PnL'] > 0])
-            
-            daily_long_pnl = daily_longs['Net_PnL'].sum()
-            daily_short_pnl = daily_shorts['Net_PnL'].sum()
-            
-            daily_gross = daily_df['P&L'].sum()
-            daily_comm = daily_df['Commission'].sum()
-            daily_net = daily_df['Net_PnL'].sum()
-            daily_gross_profit = daily_df[daily_df['P&L'] > 0]['P&L'].sum()
-            daily_gross_loss = abs(daily_df[daily_df['P&L'] < 0]['P&L'].sum())
-            daily_pf = "∞" if daily_gross_loss == 0 and daily_gross_profit > 0 else "0.00" if daily_gross_loss == 0 else f"{(daily_gross_profit / daily_gross_loss):.2f}"
-            
-            daily_total_trades = len(daily_df)
-            daily_win_count = len(daily_df[daily_df['P&L'] > 0])
-            daily_loss_count = len(daily_df[daily_df['P&L'] <= 0])
-            daily_wr = f"{(len(daily_df[daily_df['Net_PnL'] > 0]) / daily_total_trades * 100):.0f}%" if daily_total_trades > 0 else "0%"
-            
-            daily_winning_trades = daily_df[daily_df['Net_PnL'] > 0]
-            daily_losing_trades = daily_df[daily_df['Net_PnL'] < 0]
-            daily_max_win = daily_winning_trades['Net_PnL'].max() if not daily_winning_trades.empty else 0.0
-            daily_max_loss = daily_losing_trades['Net_PnL'].min() if not daily_losing_trades.empty else 0.0
-            
-            day_color = "🟢" if daily_net >= 0 else "🔴"
-            
-            day_title = f"{day_color} {date_str} | Net: \${daily_net:.2f} | WR: {daily_wr} | Best: +\${daily_max_win:.2f} | Worst: -\${abs(daily_max_loss):.2f} | {daily_total_trades} Trades"
-            
-            with st.expander(day_title, expanded=False):
-                st.markdown("### 🎯 Daily Pre-Market & Post-Market Routine")
-                col_goal, col_reflection = st.columns(2)
-                existing_goal, existing_reflection = get_daily_note_from_db(date_str)
-                with col_goal: daily_goal = st.text_area("Pre-Market Goal (What is your focus today?):", value=existing_goal, key=f"goal_{date_str}", height=150)
-                with col_reflection: daily_reflection = st.text_area("Post-Market Reflection (Did you execute on your goal?):", value=existing_reflection, key=f"ref_{date_str}", height=150)
-                if st.button("Save Daily Routine", key=f"btn_daily_{date_str}"):
-                    save_daily_note_to_db(date_str, daily_goal, daily_reflection)
-                    st.success("Daily routine saved successfully.")
+                selected_labels = st.multiselect(
+                    "Select Executions to Group:", 
+                    options=list(trade_map.keys()),
+                    key=f"bulk_sel_{date_str}"
+                )
                 
-                st.divider()
-                st.markdown("### 🧠 Intraday Psychological Stress & Bias")
-                col_d1, col_d2, col_d3, col_d4 = st.columns(4)
-                col_d1.metric("Intraday Max Cons. Wins", f"{d_max_win_streak}")
-                col_d2.metric("Intraday Max Cons. Losses", f"{d_max_loss_streak}")
-                col_d3.metric("Intraday Max Drawdown", f"-${abs(daily_max_drawdown):.2f}")
-                col_d4.metric("Daily Avg Trade P&L", f"${daily_avg_pnl:.2f}" if daily_avg_pnl >= 0 else f"-${abs(daily_avg_pnl):.2f}")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_d5, col_d6, col_d7, col_d8 = st.columns(4)
-                col_d5.metric("Long Trades Won", f"{daily_long_wins} / {len(daily_longs)}")
-                col_d6.metric("Short Trades Won", f"{daily_short_wins} / {len(daily_shorts)}")
-                col_d7.metric("Net Long P&L", f"${daily_long_pnl:.2f}" if daily_long_pnl >= 0 else f"-${abs(daily_long_pnl):.2f}")
-                col_d8.metric("Net Short P&L", f"${daily_short_pnl:.2f}" if daily_short_pnl >= 0 else f"-${abs(daily_short_pnl):.2f}")
-                st.divider()
-                
-                st.markdown("### 📊 Trade Executions")
-                
-                display_df = daily_df.copy()
-                if outcome_filter == "Profitable Only (Gross > $0)": display_df = display_df[display_df['P&L'] > 0]
-                elif outcome_filter == "Losing Only (Gross <= $0)": display_df = display_df[display_df['P&L'] <= 0]
-                    
-                if sort_order == "Highest Profit First": display_df = display_df.sort_values(by='P&L', ascending=False)
-                elif sort_order == "Biggest Loss First": display_df = display_df.sort_values(by='P&L', ascending=True)
-                else: display_df = display_df.sort_values(by='Datetime', ascending=True)
-                    
-                if display_df.empty: st.info("No trades match your current filter settings for this specific day.")
-                
-                if not display_df.empty:
-                    with st.expander("⚡ Bulk Edit Scaled Positions (Group Review)", expanded=False):
-                        st.markdown("Select multiple executions below to treat them as a single position. The strategy, tags, notes, and screenshot you provide here will be instantly applied to all selected trades simultaneously.")
-                        
-                        trade_map = {}
-                        for _, row in display_df.iterrows():
-                            label = f"{row['trade_type'].upper()} {row['Instrument']} @ {row['Timestamp']} | Net: ${row['Net_PnL']:.2f} (Qty: {row['Qty']})"
-                            trade_map[label] = row['trade_id']
+                if selected_labels:
+                    with st.form(key=f"bulk_form_{date_str}"):
+                        col_b1, col_b2 = st.columns([1, 2.5])
+                        with col_b1:
+                            bulk_strategy = st.selectbox("Strategy Category", ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"], key=f"b_strat_{date_str}")
                             
-                        selected_labels = st.multiselect(
-                            "Select Executions to Group:", 
-                            options=list(trade_map.keys()),
-                            key=f"bulk_sel_{date_str}"
-                        )
-                        
-                        if selected_labels:
-                            with st.form(key=f"bulk_form_{date_str}"):
-                                col_b1, col_b2 = st.columns([1, 2.5])
-                                with col_b1:
-                                    bulk_strategy = st.selectbox("Strategy Category", ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"], key=f"b_strat_{date_str}")
-                                    bulk_score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, 5, key=f"b_score_{date_str}")
-                                    bulk_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, key=f"b_tags_{date_str}")
-                                    bulk_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, key=f"b_conf_{date_str}")
-                                    st.markdown("---")
-                                    bulk_screenshot = st.file_uploader("Attach Screenshot (Applies to ALL)", type=['png', 'jpg', 'jpeg'], key=f"b_img_{date_str}")
-                                    
-                                with col_b2:
-                                    bulk_gb = st.text_area("1. What went good and what went bad?", height=80, key=f"b_gb_{date_str}")
-                                    bulk_imp = st.text_area("2. What can I improve?", height=80, key=f"b_imp_{date_str}")
-                                    bulk_act = st.text_area("3. How I plan to improve it?", height=80, key=f"b_act_{date_str}")
-                                    bulk_notes = st.text_area("Additional Notes / Chart Links:", height=68, key=f"b_notes_{date_str}")
-                                    st.markdown("<br><br>", unsafe_allow_html=True)
-                                    bulk_submit = st.form_submit_button("💾 Apply Review to All Selected Trades", use_container_width=True)
-                                    
-                                if bulk_submit:
-                                    img_bytes = bulk_screenshot.read() if bulk_screenshot else None
-                                    
-                                    tags_string = ",".join(bulk_tags)
-                                    conf_string = ",".join(bulk_conf)
-                                    
-                                    for label in selected_labels:
-                                        t_id = trade_map[label]
-                                        save_trade_note_to_db(t_id, bulk_notes, bulk_score, bulk_gb, bulk_imp, bulk_act, bulk_strategy, tags_string, conf_string)
-                                        
-                                        if img_bytes is not None:
-                                            safe_t_id = str(t_id).replace("/", "-").replace("\\", "-")
-                                            for old_img in [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_t_id)]:
-                                                try: os.remove(os.path.join(IMAGE_DIR, old_img))
-                                                except: pass
-                                            file_path = os.path.join(IMAGE_DIR, f"{safe_t_id}_{bulk_screenshot.name}")
-                                            with open(file_path, "wb") as f:
-                                                f.write(img_bytes)
-                                                
-                                        keys_to_clear = [f"strat_{t_id}", f"score_{t_id}", f"tags_{t_id}", f"conf_{t_id}", f"gb_{t_id}", f"imp_{t_id}", f"act_{t_id}", f"gen_{t_id}"]
-                                        for k in keys_to_clear:
-                                            st.session_state.pop(k, None)
-                                                
-                                    st.session_state.reset_trigger += 1
-                                    
-                                    st.success(f"Successfully applied unified review to {len(selected_labels)} executions!")
-                                    time.sleep(1)
-                                    st.rerun()
-                st.divider()
-                
-                # --- NEW UI: True Pagination for High-Volume Days ---
-                total_display_trades = len(display_df)
-                max_render = 30
-                
-                if total_display_trades > max_render:
-                    # Create a unique memory key for this specific day's page number
-                    page_key = f"page_{date_str}"
-                    if page_key not in st.session_state:
-                        st.session_state[page_key] = 0
-                        
-                    current_page = st.session_state[page_key]
-                    # Calculate total pages using ceiling division logic
-                    total_pages = (total_display_trades + max_render - 1) // max_render
-                    
-                    # Failsafe: If filters change and the current page no longer exists, reset it
-                    if current_page >= total_pages:
-                        current_page = max(0, total_pages - 1)
-                        st.session_state[page_key] = current_page
-                    
-                    start_idx = current_page * max_render
-                    end_idx = min(start_idx + max_render, total_display_trades)
-                    
-                    st.info(f"📑 Showing trades {start_idx + 1} to {end_idx} out of {total_display_trades}.")
-                    
-                    col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
-                    with col_p1:
-                        if st.button("⬅️ Previous Page", key=f"prev_{date_str}", use_container_width=True, disabled=(current_page == 0)):
-                            st.session_state[page_key] -= 1
-                            st.rerun()
-                    with col_p2:
-                        st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>Page {current_page + 1} of {total_pages}</b></div>", unsafe_allow_html=True)
-                    with col_p3:
-                        if st.button("Next Page ➡️", key=f"next_{date_str}", use_container_width=True, disabled=(current_page == total_pages - 1)):
-                            st.session_state[page_key] += 1
-                            st.rerun()
+                            st.markdown("---")
+                            st.markdown("🎯 **Execution Scorecard (+1 / -1)**")
+                            b_chk_ema = st.checkbox("1) Price properly Above/Below 21 EMA?", key=f"bc_ema_{date_str}")
+                            b_chk_touch = st.checkbox("2) 5-Min candle touching 21 EMA?", key=f"bc_touch_{date_str}")
+                            b_chk_ctx = st.checkbox("3) Context supportive of entry?", key=f"bc_ctx_{date_str}")
+                            b_chk_post = st.checkbox("4) Posture lock & deep breathing used?", key=f"bc_post_{date_str}")
+                            b_chk_cool = st.checkbox("5) 30-Minute Cooldown honored?", key=f"bc_cool_{date_str}")
+                            st.markdown("---")
                             
-                    # Slice the dataframe to only render this specific page
-                    display_df = display_df.iloc[start_idx:end_idx]
-                    st.markdown("<br>", unsafe_allow_html=True)
-                # ----------------------------------------------------
+                            bulk_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, key=f"b_tags_{date_str}")
+                            bulk_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, key=f"b_conf_{date_str}")
+                            st.markdown("---")
+                            bulk_screenshot = st.file_uploader("Attach Screenshot (Applies to ALL)", type=['png', 'jpg', 'jpeg'], key=f"b_img_{date_str}")
+                            
+                        with col_b2:
+                            bulk_gb = st.text_area("1. What went good and what went bad?", height=80, key=f"b_gb_{date_str}")
+                            bulk_imp = st.text_area("2. What can I improve?", height=80, key=f"b_imp_{date_str}")
+                            bulk_act = st.text_area("3. How I plan to improve it?", height=80, key=f"b_act_{date_str}")
+                            bulk_notes = st.text_area("Additional Notes / Chart Links:", height=68, key=f"b_notes_{date_str}")
+                            st.markdown("<br><br>", unsafe_allow_html=True)
+                            bulk_submit = st.form_submit_button("💾 Apply Review to All Selected Trades", use_container_width=True)
+                            
+                        if bulk_submit:
+                            img_bytes = bulk_screenshot.read() if bulk_screenshot else None
+                            
+                            calc_b_score = (1 if b_chk_ema else -1) + (1 if b_chk_touch else -1) + (1 if b_chk_ctx else -1) + (1 if b_chk_post else -1) + (1 if b_chk_cool else -1)
+                            
+                            tags_string = ",".join(bulk_tags)
+                            conf_string = ",".join(bulk_conf)
+                            
+                            for label in selected_labels:
+                                t_id = trade_map[label]
+                                save_trade_note_to_db(t_id, bulk_notes, calc_b_score, bulk_gb, bulk_imp, bulk_act, bulk_strategy, tags_string, conf_string, int(b_chk_ema), int(b_chk_touch), int(b_chk_ctx), int(b_chk_post), int(b_chk_cool))
+                                
+                                if img_bytes is not None:
+                                    safe_t_id = str(t_id).replace("/", "-").replace("\\", "-")
+                                    for old_img in [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_t_id)]:
+                                        try: os.remove(os.path.join(IMAGE_DIR, old_img))
+                                        except: pass
+                                    file_path = os.path.join(IMAGE_DIR, f"{safe_t_id}_{bulk_screenshot.name}")
+                                    with open(file_path, "wb") as f:
+                                        f.write(img_bytes)
+                                    
+                                keys_to_clear = [f"strat_{t_id}", f"score_{t_id}", f"tags_{t_id}", f"conf_{t_id}", f"gb_{t_id}", f"imp_{t_id}", f"act_{t_id}", f"gen_{t_id}"]
+                                for k in keys_to_clear:
+                                    st.session_state.pop(k, None)
+                                    
+                            st.session_state.reset_trigger += 1
+                            
+                            st.success(f"Successfully applied unified review & +{calc_b_score} Execution Score to {len(selected_labels)} executions!")
+                            time.sleep(1.5)
+                            st.rerun()
+        st.divider()
+        
+        total_display_trades = len(display_df)
+        max_render = 30
+        
+        if total_display_trades > max_render:
+            page_key = f"page_{date_str}"
+            if page_key not in st.session_state:
+                st.session_state[page_key] = 0
                 
-                for index, row in display_df.iterrows():
+            current_page = st.session_state[page_key]
+            total_pages = (total_display_trades + max_render - 1) // max_render
+            
+            if current_page >= total_pages:
+                current_page = max(0, total_pages - 1)
+                st.session_state[page_key] = current_page
+            
+            start_idx = current_page * max_render
+            end_idx = min(start_idx + max_render, total_display_trades)
+            
+            st.info(f"📑 Showing trades {start_idx + 1} to {end_idx} out of {total_display_trades}.")
+            
+            col_p1, col_p2, col_p3 = st.columns([1, 2, 1])
+            with col_p1:
+                if st.button("⬅️ Previous Page", key=f"prev_{date_str}", use_container_width=True, disabled=(current_page == 0)):
+                    st.session_state[page_key] -= 1
+                    st.rerun()
+            with col_p2:
+                st.markdown(f"<div style='text-align: center; padding-top: 5px;'><b>Page {current_page + 1} of {total_pages}</b></div>", unsafe_allow_html=True)
+            with col_p3:
+                if st.button("Next Page ➡️", key=f"next_{date_str}", use_container_width=True, disabled=(current_page == total_pages - 1)):
+                    st.session_state[page_key] += 1
+                    st.rerun()
+                    
+            display_df = display_df.iloc[start_idx:end_idx]
+            st.markdown("<br>", unsafe_allow_html=True)
+        
+        for index, row in display_df.iterrows():
                     trade_id, instrument, timestamp = row['trade_id'], row['Instrument'], row['Timestamp']
                     gross_pnl, comm, net_pnl = row['P&L'], row['Commission'], row['Net_PnL']
                     duration, qty, trade_type = row['Duration'], row['Qty'], row.get('trade_type', 'Unknown')
@@ -2734,10 +3077,10 @@ else:
                     elif pnl_so_far < 0: pnl_so_far_colored = f":red[-\${abs(pnl_so_far):.2f}]"
                     else: pnl_so_far_colored = "\$0.00"
                     
-                    # --- ADDED QTY TO THE DROPDOWN TITLE ---
-                    trade_title = f"{trade_color} {trade_type.upper()} {instrument} @ {timestamp} | Qty: {qty} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}"
+                    trade_title = f"{trade_color} {trade_type.upper()} {instrument} @ {timestamp} | In: {entry_price} | Out: {exit_price} | Qty: {qty} | Net P&L: {net_pnl_colored} | P&L So Far: {pnl_so_far_colored}"
+                    
                     with st.expander(trade_title, expanded=False):
-                        with st.form(key=f"review_form_{trade_id}_{rt}"):
+                        with st.form(key=f"v_review_form_{trade_id}_{rt}"):
                             col_details, col_journal = st.columns([1, 2.5])
                             
                             with col_details:
@@ -2773,25 +3116,35 @@ else:
                                 else: st.write("**MFE / MAE:** No market data for window")
                                 st.markdown("---")
                                 
-                                confirm_del_trade = st.checkbox("Confirm Deletion", key=f"conf_trade_{trade_id}_{rt}")
+                                confirm_del_trade = st.checkbox("Confirm Deletion", key=f"v_conf_trade_{trade_id}_{rt}")
                                 del_btn = st.form_submit_button("🗑️ Delete Trade")
                                 st.markdown("---")
                                 
                                 strategy_options = ["Uncategorized", "Trend Continuation", "Reversal break of Trendline", "Buy Low Sell High TR", "Breakout", "Counter Trend"]
                                 strat_val = row.get('strategy', 'Uncategorized')
                                 if strat_val not in strategy_options: strat_val = "Uncategorized"
-                                strategy_choice = st.selectbox("Strategy Category", strategy_options, index=strategy_options.index(strat_val), key=f"strat_{trade_id}_{rt}")
-                                score = st.slider("Execution Score (0=Worst, 10=Perfect)", 0, 10, int(row['score']), key=f"score_{trade_id}_{rt}")
+                                strategy_choice = st.selectbox("Strategy Category", strategy_options, index=strategy_options.index(strat_val), key=f"v_strat_{trade_id}_{rt}")
+                                
+                                st.markdown("---")
+                                st.markdown("🎯 **Execution Scorecard (+1 / -1)**")
+                                c_ema_val = st.checkbox("1) Price properly Above/Below 21 EMA?", value=bool(row.get('chk_ema', 0)), key=f"v_c_ema_{trade_id}_{rt}")
+                                c_touch_val = st.checkbox("2) 5-Min candle touching 21 EMA?", value=bool(row.get('chk_touch', 0)), key=f"v_c_touch_{trade_id}_{rt}")
+                                c_ctx_val = st.checkbox("3) Context supportive of entry?", value=bool(row.get('chk_context', 0)), key=f"v_c_ctx_{trade_id}_{rt}")
+                                c_post_val = st.checkbox("4) Posture lock & deep breathing used?", value=bool(row.get('chk_posture', 0)), key=f"v_c_post_{trade_id}_{rt}")
+                                c_cool_val = st.checkbox("5) 30-Minute Cooldown honored?", value=bool(row.get('chk_cooldown', 0)), key=f"v_c_cool_{trade_id}_{rt}")
+                                
+                                st.caption(f"Last Saved Execution Score: {int(row.get('score', 0))} / 5")
+                                st.markdown("---")
                                 
                                 existing_tags = [t.strip() for t in str(row.get('lesson_tags', '')).split(',') if t.strip() in LESSON_TAGS]
-                                selected_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, default=existing_tags, key=f"tags_{trade_id}_{rt}")
+                                selected_tags = st.multiselect("Tag Lessons Learned:", LESSON_TAGS, default=existing_tags, key=f"v_tags_{trade_id}_{rt}")
                                 
                                 existing_conf = [t.strip() for t in str(row.get('confluence_tags', '')).split(',') if t.strip() in CONFLUENCE_TAGS]
-                                selected_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, default=existing_conf, key=f"conf_{trade_id}_{rt}")
+                                selected_conf = st.multiselect("Price Action Confluences:", CONFLUENCE_TAGS, default=existing_conf, key=f"v_conf_{trade_id}_{rt}")
                                 
                                 st.markdown("---")
                                 safe_trade_id = str(trade_id).replace("/", "-").replace("\\", "-")
-                                screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"img_{trade_id}_{rt}")
+                                screenshot = st.file_uploader("Attach/Replace Manual Screenshot", type=['png', 'jpg', 'jpeg'], key=f"v_img_{trade_id}_{rt}")
                                 
                                 existing_images = [f for f in os.listdir(IMAGE_DIR) if f.startswith(safe_trade_id)]
                                 if existing_images:
@@ -2800,10 +3153,10 @@ else:
                                     st.markdown(f"**📁 File:**\n`{os.path.abspath(img_path)}`")
                                     
                             with col_journal:
-                                good_bad = st.text_area("1. What went good and what went bad on that trade?", value=row['good_bad'], key=f"gb_{trade_id}_{rt}", height=80)
-                                improve = st.text_area("2. What can I improve on that trade?", value=row['improve'], key=f"imp_{trade_id}_{rt}", height=80)
-                                action_plan = st.text_area("3. How I plan to improve it for the next trade?", value=row['action_plan'], key=f"act_{trade_id}_{rt}", height=80)
-                                general_notes = st.text_area("Additional Notes / Chart Links:", value=row['notes'], key=f"gen_{trade_id}_{rt}", height=68)
+                                good_bad = st.text_area("1. What went good and what went bad on that trade?", value=row['good_bad'], key=f"v_gb_{trade_id}_{rt}", height=80)
+                                improve = st.text_area("2. What can I improve on that trade?", value=row['improve'], key=f"v_imp_{trade_id}_{rt}", height=80)
+                                action_plan = st.text_area("3. How I plan to improve it for the next trade?", value=row['action_plan'], key=f"v_act_{trade_id}_{rt}", height=80)
+                                general_notes = st.text_area("Additional Notes / Chart Links:", value=row['notes'], key=f"v_gen_{trade_id}_{rt}", height=68)
                                 
                                 st.markdown("<br><br>", unsafe_allow_html=True)
                                 save_btn = st.form_submit_button("Save Trade Review", use_container_width=True)
@@ -2826,36 +3179,60 @@ else:
                             tags_string = ",".join(selected_tags)
                             conf_string = ",".join(selected_conf)
                             
-                            save_trade_note_to_db(trade_id, general_notes, score, good_bad, improve, action_plan, strategy_choice, tags_string, conf_string)
+                            calc_score = (1 if c_ema_val else -1) + (1 if c_touch_val else -1) + (1 if c_ctx_val else -1) + (1 if c_post_val else -1) + (1 if c_cool_val else -1)
+                            
+                            save_trade_note_to_db(trade_id, general_notes, calc_score, good_bad, improve, action_plan, strategy_choice, tags_string, conf_string, int(c_ema_val), int(c_touch_val), int(c_ctx_val), int(c_post_val), int(c_cool_val))
                             
                             st.session_state.reset_trigger += 1
                             
-                            st.success("Trade review secured in vault!")
-                            time.sleep(1)
+                            st.success(f"Trade review secured! Final Execution Score: {calc_score}/5")
+                            time.sleep(1.5)
                             st.rerun()
                             
                         st.markdown("---")
-                        if st.checkbox("📈 Load Interactive TradingView Chart", key=f"show_chart_{trade_id}_{rt}"):
+                        if st.checkbox("📈 Load Interactive TradingView Chart", key=f"v_show_chart_{trade_id}_{rt}"):
                             try:
                                 trade_dt = pd.to_datetime(timestamp)
-                                start_time, end_time = trade_dt - timedelta(hours=16), trade_dt + timedelta(hours=16)
+                                
+                                start_time, end_time = trade_dt - timedelta(days=3), trade_dt + timedelta(days=3)
+                                
                                 market_df = get_market_data(instrument, start_time, end_time)
                                 if not market_df.empty:
-                                    st.markdown("### 📊 TradingView Interactive Chart")
-                                    html_chart = render_tradingview_chart(market_df, entry_time, exit_time, trade_type)
-                                    components.html(html_chart, height=450)
-                                else: st.warning("No market data available for this 32-hour window.")
-                            except: pass 
-                
-                st.divider()
-                st.markdown("### ⚠️ Data Management")
-                confirm_day_del = st.checkbox(f"Confirm deleting all {len(daily_df)} trades on {date_str}", key=f"conf_day_{date_str}")
-                if st.button(f"🗑️ Delete All Trades on {date_str}", key=f"del_day_{date_str}"):
-                    if confirm_day_del:
-                        delete_day_from_db(daily_df['trade_id'].tolist())
-                        st.rerun()
-                    else:
-                        st.error("⚠️ Please check the confirmation box.")
+                                    st.markdown("### 📊 TradingView Interactive Charts")
+                                    
+                                    # Generate both chart HTMLs once to keep it fast
+                                    html_chart_5m = render_tradingview_chart(market_df, entry_time, exit_time, entry_price, exit_price, trade_type, timeframe="5min")
+                                    html_chart_1m = render_tradingview_chart(market_df, entry_time, exit_time, entry_price, exit_price, trade_type, timeframe="1min")
+                                    
+                                    # Create 3 tabs, making the Comparison tab the default
+                                    tab_compare, tab_5m, tab_1m = st.tabs(["Dual View (Compare)", "5-Minute Chart (Primary)", "1-Minute Chart (Noise Check)"])
+                                    
+                                    with tab_compare:
+                                        st.caption("Top: 5-Minute Context | Bottom: 1-Minute Execution Noise")
+                                        components.html(html_chart_5m, height=450)
+                                        st.markdown("---")
+                                        components.html(html_chart_1m, height=450)
+                                        
+                                    with tab_5m:
+                                        components.html(html_chart_5m, height=450)
+                                        
+                                    with tab_1m:
+                                        components.html(html_chart_1m, height=450)
+                                else: 
+                                    st.warning("No market data available for this 6-day window.")
+                            except Exception as e: 
+                                st.error(f"Error loading charts: {e}")
+                                pass
+
+        st.divider()
+        st.markdown("### ⚠️ Data Management")
+        confirm_day_del = st.checkbox(f"Confirm deleting all {len(daily_df)} trades on {date_str}", key=f"conf_day_{date_str}")
+        if st.button(f"🗑️ Delete All Trades on {date_str}", key=f"del_day_{date_str}"):
+            if confirm_day_del:
+                delete_day_from_db(daily_df['trade_id'].tolist())
+                st.rerun()
+            else:
+                st.error("⚠️ Please check the confirmation box.")
 
 # --- ♻️ The Universal Recycle Bin ---
 st.divider()
@@ -2978,7 +3355,7 @@ with st.expander("🛠️ Vault Surgeon (Emergency Data Extraction)", expanded=F
                     st.rerun()
                 else:
                     st.error("⚠️ Please check the confirmation box.")
-                
+            
             st.markdown("---")
             st.markdown("### Nuclear Option")
             confirm_nuke_db = st.checkbox("I understand this will wipe the entire trades database.", key="conf_nuke_db")
